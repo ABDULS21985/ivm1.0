@@ -1,0 +1,1155 @@
+openapi: "3.0.3"
+info:
+  title: IVM Platform - Order Service
+  description: |
+    Order management service for the IVM Platform. Handles the full order lifecycle
+    from creation through fulfillment, including payment orchestration, dispute
+    resolution, and multi-channel order tracking.
+
+    ## Order Lifecycle
+    DRAFT -> PENDING_PAYMENT -> PAYMENT_AUTHORIZED -> FULFILLING ->
+    PARTIALLY_FULFILLED -> COMPLETED | CANCELLED | DISPUTED -> RESOLVED
+
+    ## Idempotency
+    Order creation requires an `Idempotency-Key` header to prevent duplicate orders.
+    The key is valid for 24 hours. Repeated requests with the same key return the
+    original response.
+
+    ## Channel Types
+    Orders can originate from: KIOSK, LOCKER, STORE, MOBILE, WEB
+
+    ## ID Format
+    - Orders: `ord_01HX7B3ABC...`
+    - Line items: `li_01HX7B3DEF...`
+    - Fulfillment tasks: `ful_01HX7B3GHJ...`
+  version: "1.0.0"
+  contact:
+    name: IVM Platform Engineering
+    email: platform@ivm.ng
+  license:
+    name: Proprietary
+    url: https://ivm.ng/terms
+
+servers:
+  - url: https://api.ivm.ng
+    description: Production
+  - url: https://api.staging.ivm.ng
+    description: Staging
+  - url: http://localhost:8083
+    description: Local development
+
+tags:
+  - name: Orders
+    description: Order management
+  - name: Fulfillment
+    description: Order fulfillment tracking
+  - name: Disputes
+    description: Order dispute management
+
+paths:
+  /api/v1/orders:
+    post:
+      operationId: createOrder
+      tags:
+        - Orders
+      summary: Create order
+      description: |
+        Creates a new order. Requires an `Idempotency-Key` header to prevent
+        duplicate order creation. The order starts in DRAFT status.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Unique idempotency key (UUID) valid for 24 hours
+          schema:
+            type: string
+            format: uuid
+            example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - customerId
+                - channelType
+                - lineItems
+              properties:
+                customerId:
+                  type: string
+                  pattern: '^cust_[0-9A-HJKMNP-TV-Z]{26}$'
+                  example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                channelType:
+                  $ref: "#/components/schemas/ChannelType"
+                siteId:
+                  type: string
+                  example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+                deviceId:
+                  type: string
+                  description: Originating device ID (for kiosk/locker/store orders)
+                  example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+                lineItems:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required:
+                      - catalogItemId
+                      - quantity
+                    properties:
+                      catalogItemId:
+                        type: string
+                        example: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+                      quantity:
+                        type: integer
+                        minimum: 1
+                        example: 2
+                      notes:
+                        type: string
+                        maxLength: 500
+                        example: ""
+                promotionCodes:
+                  type: array
+                  items:
+                    type: string
+                  example: ["WELCOME10"]
+                metadata:
+                  type: object
+                  additionalProperties: true
+                  description: Arbitrary metadata for the order
+            example:
+              customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+              channelType: "KIOSK"
+              siteId: "site_01HX7B3ABCDEFGHJKMNPQRST"
+              deviceId: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+              lineItems:
+                - catalogItemId: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+                  quantity: 2
+                - catalogItemId: "itm_01HX7B3ABCDEFGHJKMNPQRSU"
+                  quantity: 1
+              promotionCodes: ["WELCOME10"]
+      responses:
+        "201":
+          description: Order created
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+              example:
+                id: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                status: "DRAFT"
+                channelType: "KIOSK"
+                siteId: "site_01HX7B3ABCDEFGHJKMNPQRST"
+                deviceId: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+                lineItems:
+                  - id: "li_01HX7B3DEFGHJKMNPQRSTUVW"
+                    catalogItemId: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+                    name: "MTN Airtime N1000"
+                    quantity: 2
+                    unitPrice:
+                      amount: 100000
+                      currency: "NGN"
+                    lineTotal:
+                      amount: 180000
+                      currency: "NGN"
+                    fulfillmentStatus: "PENDING"
+                  - id: "li_01HX7B3DEFGHJKMNPQRSTUVX"
+                    catalogItemId: "itm_01HX7B3ABCDEFGHJKMNPQRSU"
+                    name: "Peak Milk 400g"
+                    quantity: 1
+                    unitPrice:
+                      amount: 175000
+                      currency: "NGN"
+                    lineTotal:
+                      amount: 175000
+                      currency: "NGN"
+                    fulfillmentStatus: "PENDING"
+                subtotal:
+                  amount: 375000
+                  currency: "NGN"
+                discount:
+                  amount: 20000
+                  currency: "NGN"
+                tax:
+                  amount: 0
+                  currency: "NGN"
+                totalAmount:
+                  amount: 355000
+                  currency: "NGN"
+                appliedPromotions:
+                  - code: "WELCOME10"
+                    name: "New Customer Welcome"
+                    discountAmount:
+                      amount: 20000
+                      currency: "NGN"
+                createdAt: "2025-11-15T10:30:00Z"
+                updatedAt: "2025-11-15T10:30:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Duplicate idempotency key (returns original order)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "422":
+          description: Unprocessable order (e.g., items unavailable, limit exceeded)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/order-unprocessable"
+                title: "Order Unprocessable"
+                status: 422
+                detail: "One or more items are unavailable at the specified site."
+                errors:
+                  - field: "lineItems[1].catalogItemId"
+                    message: "Item 'itm_01HX7B3ABCDEFGHJKMNPQRSU' is out of stock"
+                    code: "OUT_OF_STOCK"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    get:
+      operationId: listOrders
+      tags:
+        - Orders
+      summary: List orders
+      description: Returns paginated orders with optional filtering. Operators see all orders; customers see only their own.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/OrderStatus"
+        - name: channelType
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/ChannelType"
+        - name: customerId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: siteId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: sort
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [createdAt, updatedAt, totalAmount]
+            default: "createdAt"
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: "desc"
+      responses:
+        "200":
+          description: Orders retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Order"
+                  pagination:
+                    $ref: "#/components/schemas/CursorPagination"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/orders/{id}:
+    get:
+      operationId: getOrder
+      tags:
+        - Orders
+      summary: Get order detail
+      description: Returns the full detail of an order including line items, pricing, and fulfillment status.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^ord_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+      responses:
+        "200":
+          description: Order retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    patch:
+      operationId: updateOrder
+      tags:
+        - Orders
+      summary: Update order
+      description: |
+        Updates an order. Only DRAFT orders can have line items modified.
+        Metadata and notes can be updated in other statuses.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^ord_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lineItems:
+                  type: array
+                  description: Replace line items (only for DRAFT orders)
+                  items:
+                    type: object
+                    required:
+                      - catalogItemId
+                      - quantity
+                    properties:
+                      catalogItemId:
+                        type: string
+                      quantity:
+                        type: integer
+                        minimum: 1
+                      notes:
+                        type: string
+                promotionCodes:
+                  type: array
+                  items:
+                    type: string
+                metadata:
+                  type: object
+                  additionalProperties: true
+            example:
+              lineItems:
+                - catalogItemId: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+                  quantity: 3
+              promotionCodes: ["WELCOME10"]
+      responses:
+        "200":
+          description: Order updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Order cannot be modified in its current status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/order-not-modifiable"
+                title: "Order Not Modifiable"
+                status: 409
+                detail: "Order cannot be modified in FULFILLING status."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/orders/{id}/confirm:
+    post:
+      operationId: confirmOrder
+      tags:
+        - Orders
+      summary: Confirm order
+      description: |
+        Confirms a DRAFT order and transitions it to PENDING_PAYMENT status.
+        This triggers price validation and inventory reservation. Once confirmed,
+        the order proceeds to payment collection.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^ord_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                paymentMethod:
+                  type: string
+                  enum: [CARD, MOBILE_MONEY, BANK_TRANSFER, WALLET, USSD, QR]
+                  description: Preferred payment method
+                  example: "CARD"
+                paymentMethodId:
+                  type: string
+                  description: Saved payment method ID
+                  example: "pm_01HX7B3ABCDEFGHJKMNPQRST"
+      responses:
+        "200":
+          description: Order confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Order is not in DRAFT status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "422":
+          description: Order confirmation failed (e.g., items unavailable)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/orders/{id}/cancel:
+    post:
+      operationId: cancelOrder
+      tags:
+        - Orders
+      summary: Cancel order
+      description: |
+        Cancels an order. Only orders in DRAFT, PENDING_PAYMENT, or
+        PAYMENT_AUTHORIZED status can be cancelled. If payment was authorized,
+        a void/refund is initiated automatically.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^ord_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reason
+              properties:
+                reason:
+                  type: string
+                  maxLength: 1000
+                  example: "Customer changed their mind"
+            example:
+              reason: "Customer changed their mind"
+      responses:
+        "200":
+          description: Order cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Order cannot be cancelled in its current status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/order-not-cancellable"
+                title: "Order Not Cancellable"
+                status: 409
+                detail: "Order in FULFILLING status cannot be cancelled. Please raise a dispute instead."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/orders/{id}/fulfillment:
+    get:
+      operationId: getOrderFulfillment
+      tags:
+        - Fulfillment
+      summary: Fulfillment status
+      description: Returns detailed fulfillment status for each line item in the order.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^ord_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+      responses:
+        "200":
+          description: Fulfillment status retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orderId:
+                    type: string
+                    example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                  overallStatus:
+                    type: string
+                    enum: [PENDING, IN_PROGRESS, PARTIALLY_FULFILLED, COMPLETED, FAILED]
+                    example: "IN_PROGRESS"
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FulfillmentTask"
+              example:
+                orderId: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                overallStatus: "IN_PROGRESS"
+                tasks:
+                  - id: "ful_01HX7B3GHJKMNPQRSTUVWXYZ"
+                    lineItemId: "li_01HX7B3DEFGHJKMNPQRSTUVW"
+                    itemName: "MTN Airtime N1000"
+                    type: "DIGITAL_FULFILLMENT"
+                    status: "COMPLETED"
+                    startedAt: "2025-11-15T10:31:00Z"
+                    completedAt: "2025-11-15T10:31:05Z"
+                    result:
+                      voucherCode: "1234-5678-9012-3456"
+                      serialNumber: "MTN2025111500142"
+                  - id: "ful_01HX7B3GHJKMNPQRSTUVWXY1"
+                    lineItemId: "li_01HX7B3DEFGHJKMNPQRSTUVX"
+                    itemName: "Peak Milk 400g"
+                    type: "PHYSICAL_DISPENSE"
+                    status: "IN_PROGRESS"
+                    startedAt: "2025-11-15T10:31:10Z"
+                    completedAt: null
+                    deviceId: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+                    dispenserSlot: "A3"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/orders/{id}/dispute:
+    post:
+      operationId: raiseDispute
+      tags:
+        - Disputes
+      summary: Raise dispute
+      description: |
+        Raises a dispute for an order. This transitions the order to DISPUTED status
+        and creates a dispute record for resolution. Applicable for orders in
+        FULFILLING, PARTIALLY_FULFILLED, or COMPLETED status.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^ord_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reason
+                - category
+              properties:
+                reason:
+                  type: string
+                  maxLength: 2000
+                  example: "Product was not dispensed but payment was deducted"
+                category:
+                  type: string
+                  enum:
+                    - ITEM_NOT_RECEIVED
+                    - WRONG_ITEM
+                    - DAMAGED_ITEM
+                    - PARTIAL_FULFILLMENT
+                    - DOUBLE_CHARGE
+                    - QUALITY_ISSUE
+                    - OTHER
+                  example: "ITEM_NOT_RECEIVED"
+                affectedLineItemIds:
+                  type: array
+                  items:
+                    type: string
+                  description: Specific line items affected (empty = entire order)
+                  example: ["li_01HX7B3DEFGHJKMNPQRSTUVX"]
+                evidenceUrls:
+                  type: array
+                  items:
+                    type: string
+                    format: uri
+                  description: URLs to evidence (photos, receipts)
+                  example: []
+            example:
+              reason: "Product was not dispensed but payment was deducted"
+              category: "ITEM_NOT_RECEIVED"
+              affectedLineItemIds: ["li_01HX7B3DEFGHJKMNPQRSTUVX"]
+      responses:
+        "201":
+          description: Dispute created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  disputeId:
+                    type: string
+                    example: "disp_01HX7B3ABCDEFGHJKMNPQRST"
+                  orderId:
+                    type: string
+                    example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                  status:
+                    type: string
+                    enum: [OPEN, INVESTIGATING, RESOLVED_REFUND, RESOLVED_REPLACEMENT, RESOLVED_REJECTED, CLOSED]
+                    example: "OPEN"
+                  category:
+                    type: string
+                    example: "ITEM_NOT_RECEIVED"
+                  reason:
+                    type: string
+                    example: "Product was not dispensed but payment was deducted"
+                  estimatedResolutionTime:
+                    type: string
+                    format: date-time
+                    example: "2025-11-16T10:30:00Z"
+                  createdAt:
+                    type: string
+                    format: date-time
+                    example: "2025-11-15T10:35:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Order status does not allow disputes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token from the Identity service
+
+  parameters:
+    TenantId:
+      name: X-Tenant-ID
+      in: header
+      required: true
+      description: Tenant identifier for multi-tenant context
+      schema:
+        type: string
+        example: "tnt_01HX7B3ABCDEFGHJKMNPQRST"
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: Unique request identifier for tracing
+      schema:
+        type: string
+        format: uuid
+        example: "550e8400-e29b-41d4-a716-446655440000"
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque cursor for pagination
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of items to return
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  headers:
+    X-RateLimit-Limit:
+      description: Maximum number of requests allowed in the current window
+      schema:
+        type: integer
+        example: 100
+    X-RateLimit-Remaining:
+      description: Number of requests remaining in the current window
+      schema:
+        type: integer
+        example: 95
+    X-RateLimit-Reset:
+      description: Unix timestamp when the rate limit window resets
+      schema:
+        type: integer
+        format: int64
+        example: 1700045400
+
+  schemas:
+    Order:
+      type: object
+      required:
+        - id
+        - customerId
+        - status
+        - channelType
+        - lineItems
+        - totalAmount
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          pattern: '^ord_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+        customerId:
+          type: string
+          example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+        status:
+          $ref: "#/components/schemas/OrderStatus"
+        channelType:
+          $ref: "#/components/schemas/ChannelType"
+        siteId:
+          type: string
+          example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+        deviceId:
+          type: string
+          example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+        lineItems:
+          type: array
+          items:
+            $ref: "#/components/schemas/OrderLineItem"
+        subtotal:
+          $ref: "#/components/schemas/Money"
+        discount:
+          $ref: "#/components/schemas/Money"
+        tax:
+          $ref: "#/components/schemas/Money"
+        totalAmount:
+          $ref: "#/components/schemas/Money"
+        appliedPromotions:
+          type: array
+          items:
+            type: object
+            properties:
+              code:
+                type: string
+              name:
+                type: string
+              discountAmount:
+                $ref: "#/components/schemas/Money"
+        paymentId:
+          type: string
+          nullable: true
+          description: Associated payment ID
+          example: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+        cancellationReason:
+          type: string
+          nullable: true
+        disputeId:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+          example: "2025-11-15T10:30:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2025-11-15T10:30:00Z"
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    OrderLineItem:
+      type: object
+      required:
+        - id
+        - catalogItemId
+        - name
+        - quantity
+        - unitPrice
+        - lineTotal
+        - fulfillmentStatus
+      properties:
+        id:
+          type: string
+          pattern: '^li_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "li_01HX7B3DEFGHJKMNPQRSTUVW"
+        catalogItemId:
+          type: string
+          example: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+        name:
+          type: string
+          example: "MTN Airtime N1000"
+        quantity:
+          type: integer
+          minimum: 1
+          example: 2
+        unitPrice:
+          $ref: "#/components/schemas/Money"
+        lineTotal:
+          $ref: "#/components/schemas/Money"
+        fulfillmentStatus:
+          type: string
+          enum: [PENDING, IN_PROGRESS, COMPLETED, FAILED, CANCELLED]
+          example: "PENDING"
+        notes:
+          type: string
+          example: ""
+
+    OrderStatus:
+      type: string
+      enum:
+        - DRAFT
+        - PENDING_PAYMENT
+        - PAYMENT_AUTHORIZED
+        - FULFILLING
+        - PARTIALLY_FULFILLED
+        - COMPLETED
+        - CANCELLED
+        - DISPUTED
+        - RESOLVED
+      description: |
+        Order lifecycle status:
+        - DRAFT: Order created, can be modified
+        - PENDING_PAYMENT: Awaiting payment
+        - PAYMENT_AUTHORIZED: Payment authorized, ready for fulfillment
+        - FULFILLING: Items being fulfilled/dispensed
+        - PARTIALLY_FULFILLED: Some items fulfilled, others pending
+        - COMPLETED: All items fulfilled successfully
+        - CANCELLED: Order cancelled (before fulfillment)
+        - DISPUTED: Customer raised a dispute
+        - RESOLVED: Dispute resolved
+      example: "DRAFT"
+
+    ChannelType:
+      type: string
+      enum:
+        - KIOSK
+        - LOCKER
+        - STORE
+        - MOBILE
+        - WEB
+      description: |
+        Sales channel where the order originated:
+        - KIOSK: Self-service vending kiosk
+        - LOCKER: Smart locker system
+        - STORE: Autonomous store
+        - MOBILE: Mobile application
+        - WEB: Web application
+      example: "KIOSK"
+
+    FulfillmentTask:
+      type: object
+      required:
+        - id
+        - lineItemId
+        - type
+        - status
+      properties:
+        id:
+          type: string
+          pattern: '^ful_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "ful_01HX7B3GHJKMNPQRSTUVWXYZ"
+        lineItemId:
+          type: string
+          example: "li_01HX7B3DEFGHJKMNPQRSTUVW"
+        itemName:
+          type: string
+          example: "MTN Airtime N1000"
+        type:
+          type: string
+          enum:
+            - DIGITAL_FULFILLMENT
+            - PHYSICAL_DISPENSE
+            - LOCKER_DEPOSIT
+            - MANUAL_HANDOVER
+            - EXTERNAL_DELIVERY
+          example: "DIGITAL_FULFILLMENT"
+        status:
+          type: string
+          enum: [PENDING, IN_PROGRESS, COMPLETED, FAILED, RETRYING]
+          example: "COMPLETED"
+        deviceId:
+          type: string
+          nullable: true
+          example: null
+        dispenserSlot:
+          type: string
+          nullable: true
+          description: Physical slot for vending/locker fulfillment
+          example: null
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        failureReason:
+          type: string
+          nullable: true
+        retryCount:
+          type: integer
+          default: 0
+        result:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Fulfillment result data (e.g., voucher codes, tracking info)
+
+    Money:
+      type: object
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          type: integer
+          description: Amount in minor currency units (kobo for NGN)
+          example: 355000
+        currency:
+          type: string
+          description: ISO 4217 currency code
+          pattern: '^[A-Z]{3}$'
+          example: "NGN"
+
+    CursorPagination:
+      type: object
+      properties:
+        cursor:
+          type: string
+          nullable: true
+        hasMore:
+          type: boolean
+        limit:
+          type: integer
+
+    ProblemDetail:
+      type: object
+      description: RFC 7807 Problem Details for HTTP APIs
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+          example: "https://api.ivm.ng/problems/validation-error"
+        title:
+          type: string
+          example: "Validation Error"
+        status:
+          type: integer
+          example: 400
+        detail:
+          type: string
+        instance:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+              code:
+                type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters or body
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/validation-error"
+            title: "Validation Error"
+            status: 400
+            detail: "The request body contains invalid fields."
+
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/unauthorized"
+            title: "Unauthorized"
+            status: 401
+            detail: "The access token is missing, invalid, or expired."
+
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/forbidden"
+            title: "Forbidden"
+            status: 403
+            detail: "You do not have permission to access this resource."
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/not-found"
+            title: "Not Found"
+            status: 404
+            detail: "The requested order was not found."
+
+    TooManyRequests:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            example: 60
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/rate-limit-exceeded"
+            title: "Too Many Requests"
+            status: 429
+            detail: "Rate limit exceeded."
+
+    InternalServerError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/internal-error"
+            title: "Internal Server Error"
+            status: 500
+            detail: "An unexpected error occurred."
+
+security:
+  - BearerAuth: []

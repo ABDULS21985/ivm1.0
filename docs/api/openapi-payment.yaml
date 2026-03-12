@@ -1,0 +1,1397 @@
+openapi: "3.0.3"
+info:
+  title: IVM Platform - Payment Service
+  description: |
+    Payment processing service for the IVM Platform. Handles the full payment lifecycle
+    including initiation, authorization, capture, void, and refund operations. Supports
+    multiple payment methods common in Nigeria including cards, mobile money, bank
+    transfers, USSD, QR codes, and wallet payments.
+
+    ## Payment Flow
+    INITIATED -> AUTHORIZED -> CAPTURED -> SETTLED
+    INITIATED -> AUTHORIZED -> VOIDED
+    CAPTURED -> PARTIALLY_REFUNDED | FULLY_REFUNDED
+
+    ## Payment Methods
+    - **CARD**: Debit/credit cards via Paystack, Flutterwave
+    - **MOBILE_MONEY**: OPay, PalmPay, Kuda
+    - **BANK_TRANSFER**: Direct bank transfer via NIBSS
+    - **WALLET**: IVM wallet balance
+    - **USSD**: USSD-based payment (e.g., *737#, *901#)
+    - **QR**: QR code scan to pay
+
+    ## Tokenization
+    Card details are tokenized and never stored in plaintext. PCI DSS compliance
+    is maintained through processor-side tokenization.
+
+    ## ID Format
+    - Payments: `pay_01HX7B3ABC...`
+    - Payment methods: `pm_01HX7B3DEF...`
+    - Settlements: `stl_01HX7B3GHJ...`
+  version: "1.0.0"
+  contact:
+    name: IVM Platform Engineering
+    email: platform@ivm.ng
+  license:
+    name: Proprietary
+    url: https://ivm.ng/terms
+
+servers:
+  - url: https://api.ivm.ng
+    description: Production
+  - url: https://api.staging.ivm.ng
+    description: Staging
+  - url: http://localhost:8084
+    description: Local development
+
+tags:
+  - name: Payments
+    description: Payment processing
+  - name: Payment Methods
+    description: Saved payment methods management
+  - name: Settlements
+    description: Settlement records
+
+paths:
+  /api/v1/payments:
+    post:
+      operationId: initiatePayment
+      tags:
+        - Payments
+      summary: Initiate payment
+      description: |
+        Initiates a new payment for an order. Returns payment details including
+        any required authorization data (e.g., redirect URL for 3DS, USSD code).
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+            example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - orderId
+                - amount
+                - method
+              properties:
+                orderId:
+                  type: string
+                  pattern: '^ord_[0-9A-HJKMNP-TV-Z]{26}$'
+                  example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                amount:
+                  $ref: "#/components/schemas/Money"
+                method:
+                  $ref: "#/components/schemas/PaymentMethod"
+                paymentMethodId:
+                  type: string
+                  description: Saved payment method ID (for tokenized card payments)
+                  example: "pm_01HX7B3DEFGHJKMNPQRSTUVW"
+                customerId:
+                  type: string
+                  example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                callbackUrl:
+                  type: string
+                  format: uri
+                  description: URL for payment gateway callback
+                  example: "https://api.ivm.ng/webhooks/payment/callback"
+                metadata:
+                  type: object
+                  additionalProperties: true
+            example:
+              orderId: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+              amount:
+                amount: 355000
+                currency: "NGN"
+              method: "CARD"
+              paymentMethodId: "pm_01HX7B3DEFGHJKMNPQRSTUVW"
+              customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+      responses:
+        "201":
+          description: Payment initiated
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  payment:
+                    $ref: "#/components/schemas/Payment"
+                  authorization:
+                    type: object
+                    description: Authorization details (method-specific)
+                    properties:
+                      type:
+                        type: string
+                        enum: [REDIRECT, PIN, OTP, USSD_CODE, QR_DATA, NONE]
+                        example: "REDIRECT"
+                      redirectUrl:
+                        type: string
+                        format: uri
+                        description: 3DS redirect URL (for card payments)
+                      ussdCode:
+                        type: string
+                        description: USSD code to dial (for USSD payments)
+                      qrData:
+                        type: string
+                        description: QR code data (for QR payments)
+                      expiresAt:
+                        type: string
+                        format: date-time
+              example:
+                payment:
+                  id: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+                  orderId: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                  customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                  amount:
+                    amount: 355000
+                    currency: "NGN"
+                  method: "CARD"
+                  status: "INITIATED"
+                  processor: "PAYSTACK"
+                  processorReference: "PAY_txn_abc123def456"
+                  createdAt: "2025-11-15T10:31:00Z"
+                  updatedAt: "2025-11-15T10:31:00Z"
+                authorization:
+                  type: "REDIRECT"
+                  redirectUrl: "https://checkout.paystack.com/abc123def456"
+                  expiresAt: "2025-11-15T10:46:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: Payment cannot be initiated (e.g., order not in correct state)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/payments/{id}/authorize:
+    post:
+      operationId: authorizePayment
+      tags:
+        - Payments
+      summary: Authorize payment
+      description: |
+        Completes the authorization step for a payment. Used after external
+        authorization (e.g., 3DS callback, OTP verification). For some methods,
+        authorization happens automatically during initiation.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                otp:
+                  type: string
+                  description: OTP for card/mobile money authorization
+                  example: "123456"
+                pin:
+                  type: string
+                  description: PIN for card authorization
+                  example: "1234"
+                processorCallback:
+                  type: object
+                  additionalProperties: true
+                  description: Data from payment processor callback
+      responses:
+        "200":
+          description: Payment authorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+              example:
+                id: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+                orderId: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                amount:
+                  amount: 355000
+                  currency: "NGN"
+                method: "CARD"
+                status: "AUTHORIZED"
+                processor: "PAYSTACK"
+                processorReference: "PAY_txn_abc123def456"
+                authorizationCode: "AUTH_abc123"
+                authorizedAt: "2025-11-15T10:32:00Z"
+                createdAt: "2025-11-15T10:31:00Z"
+                updatedAt: "2025-11-15T10:32:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Payment not in INITIATED status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/payments/{id}/capture:
+    post:
+      operationId: capturePayment
+      tags:
+        - Payments
+      summary: Capture payment
+      description: |
+        Captures a previously authorized payment, completing the funds transfer.
+        Supports partial captures for split or partial fulfillment scenarios.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  allOf:
+                    - $ref: "#/components/schemas/Money"
+                  description: Amount to capture (for partial capture). Defaults to full authorized amount.
+            example:
+              amount:
+                amount: 355000
+                currency: "NGN"
+      responses:
+        "200":
+          description: Payment captured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+              example:
+                id: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+                orderId: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                amount:
+                  amount: 355000
+                  currency: "NGN"
+                capturedAmount:
+                  amount: 355000
+                  currency: "NGN"
+                method: "CARD"
+                status: "CAPTURED"
+                processor: "PAYSTACK"
+                processorReference: "PAY_txn_abc123def456"
+                capturedAt: "2025-11-15T10:32:30Z"
+                createdAt: "2025-11-15T10:31:00Z"
+                updatedAt: "2025-11-15T10:32:30Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Payment not in AUTHORIZED status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/payments/{id}/void:
+    post:
+      operationId: voidPayment
+      tags:
+        - Payments
+      summary: Void payment
+      description: |
+        Voids an authorized but not yet captured payment, releasing the
+        hold on the customer's funds.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reason
+              properties:
+                reason:
+                  type: string
+                  maxLength: 500
+                  example: "Order cancelled by customer"
+            example:
+              reason: "Order cancelled by customer"
+      responses:
+        "200":
+          description: Payment voided
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Payment not in AUTHORIZED status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/payments/{id}/refund:
+    post:
+      operationId: refundPayment
+      tags:
+        - Payments
+      summary: Refund payment
+      description: |
+        Initiates a full or partial refund for a captured payment. Partial refunds
+        can be issued multiple times until the full amount is refunded.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reason
+              properties:
+                amount:
+                  allOf:
+                    - $ref: "#/components/schemas/Money"
+                  description: Refund amount (partial or full). Defaults to full captured amount.
+                reason:
+                  type: string
+                  maxLength: 1000
+                  example: "Item not dispensed from vending machine"
+                disputeId:
+                  type: string
+                  description: Associated dispute ID if refund is dispute resolution
+                  example: "disp_01HX7B3ABCDEFGHJKMNPQRST"
+            example:
+              amount:
+                amount: 175000
+                currency: "NGN"
+              reason: "Item not dispensed from vending machine"
+              disputeId: "disp_01HX7B3ABCDEFGHJKMNPQRST"
+      responses:
+        "200":
+          description: Refund initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  payment:
+                    $ref: "#/components/schemas/Payment"
+                  refund:
+                    type: object
+                    properties:
+                      refundId:
+                        type: string
+                        example: "ref_01HX7B3ABCDEFGHJKMNPQRST"
+                      amount:
+                        $ref: "#/components/schemas/Money"
+                      status:
+                        type: string
+                        enum: [PENDING, COMPLETED, FAILED]
+                        example: "PENDING"
+                      estimatedArrival:
+                        type: string
+                        format: date-time
+                        description: Estimated time for refund to reach customer
+              example:
+                payment:
+                  id: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+                  orderId: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                  amount:
+                    amount: 355000
+                    currency: "NGN"
+                  capturedAmount:
+                    amount: 355000
+                    currency: "NGN"
+                  refundedAmount:
+                    amount: 175000
+                    currency: "NGN"
+                  method: "CARD"
+                  status: "PARTIALLY_REFUNDED"
+                  updatedAt: "2025-11-15T11:00:00Z"
+                refund:
+                  refundId: "ref_01HX7B3ABCDEFGHJKMNPQRST"
+                  amount:
+                    amount: 175000
+                    currency: "NGN"
+                  status: "PENDING"
+                  estimatedArrival: "2025-11-18T00:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Payment not in a refundable status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "422":
+          description: Refund amount exceeds captured amount
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/refund-exceeds-captured"
+                title: "Refund Amount Exceeds Captured"
+                status: 422
+                detail: "The refund amount (NGN 5,000.00) exceeds the remaining captured amount (NGN 3,550.00)."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/payments/{id}:
+    get:
+      operationId: getPayment
+      tags:
+        - Payments
+      summary: Get payment detail
+      description: Returns the full detail of a payment including processing history.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+      responses:
+        "200":
+          description: Payment detail retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/payments/{id}/status:
+    get:
+      operationId: getPaymentStatus
+      tags:
+        - Payments
+      summary: Get payment status
+      description: Returns a lightweight payment status for polling. Faster than full detail endpoint.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+      responses:
+        "200":
+          description: Payment status retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    example: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+                  status:
+                    $ref: "#/components/schemas/PaymentStatus"
+                  updatedAt:
+                    type: string
+                    format: date-time
+              example:
+                id: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+                status: "CAPTURED"
+                updatedAt: "2025-11-15T10:32:30Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/payments/methods:
+    post:
+      operationId: addPaymentMethod
+      tags:
+        - Payment Methods
+      summary: Add payment method
+      description: |
+        Saves a payment method for future use. Card details are tokenized via the
+        payment processor and only the token is stored.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - customerId
+                - type
+              properties:
+                customerId:
+                  type: string
+                  example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                type:
+                  $ref: "#/components/schemas/PaymentMethod"
+                card:
+                  type: object
+                  description: Card details (will be tokenized)
+                  properties:
+                    number:
+                      type: string
+                      description: Card number (PAN) - tokenized immediately
+                      example: "5399831619690403"
+                    expiryMonth:
+                      type: string
+                      example: "12"
+                    expiryYear:
+                      type: string
+                      example: "2027"
+                    cvv:
+                      type: string
+                      example: "123"
+                    holderName:
+                      type: string
+                      example: "ADEWALE OKONKWO"
+                bankAccount:
+                  type: object
+                  description: Bank account details (for bank transfer)
+                  properties:
+                    bankCode:
+                      type: string
+                      example: "058"
+                    accountNumber:
+                      type: string
+                      example: "0123456789"
+                    accountName:
+                      type: string
+                      example: "Adewale Okonkwo"
+                mobileMoneyNumber:
+                  type: string
+                  description: Mobile money phone number
+                  example: "+2348012345678"
+                isDefault:
+                  type: boolean
+                  default: false
+                label:
+                  type: string
+                  description: Customer-friendly label
+                  example: "My GTBank Card"
+            example:
+              customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+              type: "CARD"
+              card:
+                number: "5399831619690403"
+                expiryMonth: "12"
+                expiryYear: "2027"
+                cvv: "123"
+                holderName: "ADEWALE OKONKWO"
+              isDefault: true
+              label: "My GTBank Card"
+      responses:
+        "201":
+          description: Payment method saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenizedCard"
+              example:
+                id: "pm_01HX7B3DEFGHJKMNPQRSTUVW"
+                customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                type: "CARD"
+                label: "My GTBank Card"
+                card:
+                  brand: "MASTERCARD"
+                  last4: "0403"
+                  expiryMonth: "12"
+                  expiryYear: "2027"
+                  holderName: "ADEWALE OKONKWO"
+                  bank: "Guaranty Trust Bank"
+                  countryCode: "NG"
+                isDefault: true
+                createdAt: "2025-11-15T10:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          description: Card validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/card-validation-failed"
+                title: "Card Validation Failed"
+                status: 422
+                detail: "The card number is invalid or the card has been declined."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    get:
+      operationId: listPaymentMethods
+      tags:
+        - Payment Methods
+      summary: List payment methods
+      description: Returns all saved payment methods for the authenticated user or specified customer.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: customerId
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+        - name: type
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/PaymentMethod"
+      responses:
+        "200":
+          description: Payment methods retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TokenizedCard"
+              example:
+                data:
+                  - id: "pm_01HX7B3DEFGHJKMNPQRSTUVW"
+                    customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                    type: "CARD"
+                    label: "My GTBank Card"
+                    card:
+                      brand: "MASTERCARD"
+                      last4: "0403"
+                      expiryMonth: "12"
+                      expiryYear: "2027"
+                      holderName: "ADEWALE OKONKWO"
+                      bank: "Guaranty Trust Bank"
+                      countryCode: "NG"
+                    isDefault: true
+                    createdAt: "2025-11-15T10:00:00Z"
+                  - id: "pm_01HX7B3DEFGHJKMNPQRSTUVX"
+                    customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                    type: "MOBILE_MONEY"
+                    label: "OPay Wallet"
+                    mobileMoneyDetails:
+                      provider: "OPAY"
+                      maskedNumber: "+234801****678"
+                    isDefault: false
+                    createdAt: "2025-11-10T08:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/payments/methods/{id}:
+    delete:
+      operationId: removePaymentMethod
+      tags:
+        - Payment Methods
+      summary: Remove payment method
+      description: Removes a saved payment method. The token is invalidated with the payment processor.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^pm_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "pm_01HX7B3DEFGHJKMNPQRSTUVW"
+      responses:
+        "204":
+          description: Payment method removed
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Cannot remove payment method with pending payments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/settlements:
+    get:
+      operationId: listSettlements
+      tags:
+        - Settlements
+      summary: List settlements
+      description: Returns paginated settlement records. Requires operator or admin role.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [PENDING, PROCESSING, COMPLETED, FAILED]
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Settlements retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SettlementRecord"
+                  pagination:
+                    $ref: "#/components/schemas/CursorPagination"
+              example:
+                data:
+                  - id: "stl_01HX7B3GHJKMNPQRSTUVWXYZ"
+                    batchId: "batch_2025-11-15_001"
+                    totalAmount:
+                      amount: 25000000
+                      currency: "NGN"
+                    transactionCount: 142
+                    status: "COMPLETED"
+                    processor: "PAYSTACK"
+                    settlementDate: "2025-11-15"
+                    bankAccount:
+                      bankName: "Guaranty Trust Bank"
+                      accountNumber: "****6789"
+                    completedAt: "2025-11-15T16:00:00Z"
+                    createdAt: "2025-11-15T06:00:00Z"
+                pagination:
+                  cursor: null
+                  hasMore: false
+                  limit: 20
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/settlements/{id}:
+    get:
+      operationId: getSettlement
+      tags:
+        - Settlements
+      summary: Get settlement detail
+      description: Returns detailed settlement record including individual payment references.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^stl_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "stl_01HX7B3GHJKMNPQRSTUVWXYZ"
+      responses:
+        "200":
+          description: Settlement detail retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettlementRecord"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token from the Identity service
+
+  parameters:
+    TenantId:
+      name: X-Tenant-ID
+      in: header
+      required: true
+      description: Tenant identifier for multi-tenant context
+      schema:
+        type: string
+        example: "tnt_01HX7B3ABCDEFGHJKMNPQRST"
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  headers:
+    X-RateLimit-Limit:
+      description: Maximum requests in current window
+      schema:
+        type: integer
+        example: 100
+    X-RateLimit-Remaining:
+      description: Requests remaining in current window
+      schema:
+        type: integer
+        example: 95
+    X-RateLimit-Reset:
+      description: Unix timestamp when rate limit resets
+      schema:
+        type: integer
+        format: int64
+        example: 1700045400
+
+  schemas:
+    Payment:
+      type: object
+      required:
+        - id
+        - orderId
+        - amount
+        - method
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+        orderId:
+          type: string
+          example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+        customerId:
+          type: string
+          example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+        amount:
+          $ref: "#/components/schemas/Money"
+        capturedAmount:
+          allOf:
+            - $ref: "#/components/schemas/Money"
+          nullable: true
+        refundedAmount:
+          allOf:
+            - $ref: "#/components/schemas/Money"
+          nullable: true
+        method:
+          $ref: "#/components/schemas/PaymentMethod"
+        status:
+          $ref: "#/components/schemas/PaymentStatus"
+        processor:
+          type: string
+          description: Payment processor used
+          enum: [PAYSTACK, FLUTTERWAVE, NIBSS, INTERNAL_WALLET]
+          example: "PAYSTACK"
+        processorReference:
+          type: string
+          description: Reference from the payment processor
+          example: "PAY_txn_abc123def456"
+        authorizationCode:
+          type: string
+          nullable: true
+          example: "AUTH_abc123"
+        failureReason:
+          type: string
+          nullable: true
+        voidReason:
+          type: string
+          nullable: true
+        refunds:
+          type: array
+          items:
+            type: object
+            properties:
+              refundId:
+                type: string
+              amount:
+                $ref: "#/components/schemas/Money"
+              reason:
+                type: string
+              status:
+                type: string
+                enum: [PENDING, COMPLETED, FAILED]
+              createdAt:
+                type: string
+                format: date-time
+        metadata:
+          type: object
+          additionalProperties: true
+        authorizedAt:
+          type: string
+          format: date-time
+          nullable: true
+        capturedAt:
+          type: string
+          format: date-time
+          nullable: true
+        settledAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+          example: "2025-11-15T10:31:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2025-11-15T10:31:00Z"
+
+    PaymentStatus:
+      type: string
+      enum:
+        - INITIATED
+        - AUTHORIZED
+        - CAPTURED
+        - SETTLED
+        - FAILED
+        - VOIDED
+        - PARTIALLY_REFUNDED
+        - FULLY_REFUNDED
+      description: |
+        Payment lifecycle status:
+        - INITIATED: Payment created, awaiting authorization
+        - AUTHORIZED: Funds held, awaiting capture
+        - CAPTURED: Funds transferred
+        - SETTLED: Funds settled to merchant account
+        - FAILED: Payment failed
+        - VOIDED: Authorization reversed
+        - PARTIALLY_REFUNDED: Part of captured amount refunded
+        - FULLY_REFUNDED: Full captured amount refunded
+
+    PaymentMethod:
+      type: string
+      enum:
+        - CARD
+        - MOBILE_MONEY
+        - BANK_TRANSFER
+        - WALLET
+        - USSD
+        - QR
+      description: |
+        Supported payment methods:
+        - CARD: Debit/credit card
+        - MOBILE_MONEY: OPay, PalmPay, etc.
+        - BANK_TRANSFER: Direct bank transfer
+        - WALLET: IVM wallet balance
+        - USSD: USSD-based payment
+        - QR: QR code scan to pay
+
+    TokenizedCard:
+      type: object
+      required:
+        - id
+        - customerId
+        - type
+        - createdAt
+      properties:
+        id:
+          type: string
+          pattern: '^pm_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "pm_01HX7B3DEFGHJKMNPQRSTUVW"
+        customerId:
+          type: string
+          example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+        type:
+          $ref: "#/components/schemas/PaymentMethod"
+        label:
+          type: string
+          example: "My GTBank Card"
+        card:
+          type: object
+          description: Tokenized card details (no sensitive data)
+          properties:
+            brand:
+              type: string
+              enum: [VISA, MASTERCARD, VERVE]
+              example: "MASTERCARD"
+            last4:
+              type: string
+              pattern: '^\d{4}$'
+              example: "0403"
+            expiryMonth:
+              type: string
+              example: "12"
+            expiryYear:
+              type: string
+              example: "2027"
+            holderName:
+              type: string
+              example: "ADEWALE OKONKWO"
+            bank:
+              type: string
+              example: "Guaranty Trust Bank"
+            countryCode:
+              type: string
+              example: "NG"
+        bankAccountDetails:
+          type: object
+          nullable: true
+          properties:
+            bankName:
+              type: string
+            maskedAccountNumber:
+              type: string
+              example: "****6789"
+        mobileMoneyDetails:
+          type: object
+          nullable: true
+          properties:
+            provider:
+              type: string
+              example: "OPAY"
+            maskedNumber:
+              type: string
+              example: "+234801****678"
+        isDefault:
+          type: boolean
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+          example: "2025-11-15T10:00:00Z"
+
+    SettlementRecord:
+      type: object
+      required:
+        - id
+        - totalAmount
+        - transactionCount
+        - status
+        - settlementDate
+        - createdAt
+      properties:
+        id:
+          type: string
+          pattern: '^stl_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "stl_01HX7B3GHJKMNPQRSTUVWXYZ"
+        batchId:
+          type: string
+          example: "batch_2025-11-15_001"
+        totalAmount:
+          $ref: "#/components/schemas/Money"
+        fee:
+          $ref: "#/components/schemas/Money"
+        netAmount:
+          $ref: "#/components/schemas/Money"
+        transactionCount:
+          type: integer
+          example: 142
+        status:
+          type: string
+          enum: [PENDING, PROCESSING, COMPLETED, FAILED]
+          example: "COMPLETED"
+        processor:
+          type: string
+          example: "PAYSTACK"
+        settlementDate:
+          type: string
+          format: date
+          example: "2025-11-15"
+        bankAccount:
+          type: object
+          properties:
+            bankName:
+              type: string
+              example: "Guaranty Trust Bank"
+            accountNumber:
+              type: string
+              example: "****6789"
+        paymentIds:
+          type: array
+          items:
+            type: string
+          description: List of payment IDs included in this settlement
+        failureReason:
+          type: string
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    Money:
+      type: object
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          type: integer
+          description: Amount in minor currency units (kobo for NGN)
+          example: 355000
+        currency:
+          type: string
+          description: ISO 4217 currency code
+          pattern: '^[A-Z]{3}$'
+          example: "NGN"
+
+    CursorPagination:
+      type: object
+      properties:
+        cursor:
+          type: string
+          nullable: true
+        hasMore:
+          type: boolean
+        limit:
+          type: integer
+
+    ProblemDetail:
+      type: object
+      description: RFC 7807 Problem Details for HTTP APIs
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+              code:
+                type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters or body
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/validation-error"
+            title: "Validation Error"
+            status: 400
+            detail: "The request body contains invalid fields."
+
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/unauthorized"
+            title: "Unauthorized"
+            status: 401
+            detail: "The access token is missing, invalid, or expired."
+
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/forbidden"
+            title: "Forbidden"
+            status: 403
+            detail: "You do not have permission to access this resource."
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/not-found"
+            title: "Not Found"
+            status: 404
+            detail: "The requested payment was not found."
+
+    TooManyRequests:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            example: 60
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/rate-limit-exceeded"
+            title: "Too Many Requests"
+            status: 429
+            detail: "Rate limit exceeded."
+
+    InternalServerError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/internal-error"
+            title: "Internal Server Error"
+            status: 500
+            detail: "An unexpected error occurred."
+
+security:
+  - BearerAuth: []

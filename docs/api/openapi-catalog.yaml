@@ -1,0 +1,1522 @@
+openapi: "3.0.3"
+info:
+  title: IVM Platform - Catalog & Pricing Service
+  description: |
+    Catalog and pricing service for the IVM Platform. Manages product and service listings,
+    categories, pricing rules, and promotions across all channel types (kiosks, lockers,
+    stores, mobile, web).
+
+    ## Item Types
+    The catalog supports multiple item types reflecting the diverse services offered:
+    - **PHYSICAL_PRODUCT**: Tangible goods dispensed from vending machines or stores
+    - **DIGITAL_SERVICE**: Airtime, data bundles, subscriptions
+    - **SIM_CARD**: Telecom SIM cards
+    - **INSURANCE_POLICY**: Micro-insurance products
+    - **BANKING_SERVICE**: Account opening, transfers
+    - **TICKET**: Transport, event, lottery tickets
+    - **DOCUMENT_SERVICE**: Printing, scanning, photocopying
+
+    ## Pricing
+    All monetary values use the Money object with amounts in minor currency units
+    (kobo for NGN). Prices can be channel-specific and time-bound via promotions.
+
+    ## ID Format
+    All entity IDs use prefixed ULIDs:
+    - Items: `itm_01HX7B3ABC...`
+    - Categories: `cat_01HX7B3DEF...`
+    - Promotions: `promo_01HX7B3GHJ...`
+  version: "1.0.0"
+  contact:
+    name: IVM Platform Engineering
+    email: platform@ivm.ng
+  license:
+    name: Proprietary
+    url: https://ivm.ng/terms
+
+servers:
+  - url: https://api.ivm.ng
+    description: Production
+  - url: https://api.staging.ivm.ng
+    description: Staging
+  - url: http://localhost:8082
+    description: Local development
+
+tags:
+  - name: Items
+    description: Catalog item management
+  - name: Categories
+    description: Category management
+  - name: Pricing
+    description: Price resolution and calculation
+  - name: Promotions
+    description: Promotion management
+
+paths:
+  /api/v1/catalog/items:
+    get:
+      operationId: listCatalogItems
+      tags:
+        - Items
+      summary: List catalog items
+      description: |
+        Returns a paginated list of catalog items with optional filtering by channel type,
+        site, category, item type, and availability. Uses cursor-based pagination.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: channelType
+          in: query
+          required: false
+          description: Filter by sales channel
+          schema:
+            type: string
+            enum: [KIOSK, LOCKER, STORE, MOBILE, WEB]
+            example: "KIOSK"
+        - name: siteId
+          in: query
+          required: false
+          description: Filter by site/location
+          schema:
+            type: string
+            example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+        - name: category
+          in: query
+          required: false
+          description: Filter by category ID
+          schema:
+            type: string
+            example: "cat_01HX7B3DEFGHJKMNPQRSTUVW"
+        - name: itemType
+          in: query
+          required: false
+          description: Filter by item type
+          schema:
+            type: string
+            enum: [PHYSICAL_PRODUCT, DIGITAL_SERVICE, SIM_CARD, INSURANCE_POLICY, BANKING_SERVICE, TICKET, DOCUMENT_SERVICE]
+        - name: search
+          in: query
+          required: false
+          description: Full-text search on item name and description
+          schema:
+            type: string
+            example: "airtime"
+        - name: available
+          in: query
+          required: false
+          description: Filter by availability status
+          schema:
+            type: boolean
+            default: true
+        - name: sort
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [name, price, createdAt, popularity]
+            default: "name"
+        - name: order
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: "asc"
+      responses:
+        "200":
+          description: Catalog items retrieved
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CatalogItem"
+                  pagination:
+                    $ref: "#/components/schemas/CursorPagination"
+              example:
+                data:
+                  - id: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+                    name: "MTN Airtime N1000"
+                    description: "MTN Nigeria airtime top-up, N1,000 denomination"
+                    itemType: "DIGITAL_SERVICE"
+                    categoryId: "cat_01HX7B3DEFGHJKMNPQRSTUVW"
+                    categoryName: "Airtime & Data"
+                    sku: "MTN-AIR-1000"
+                    price:
+                      amount: 100000
+                      currency: "NGN"
+                    imageUrl: "https://cdn.ivm.ng/catalog/mtn-airtime-1000.png"
+                    available: true
+                    channelTypes: ["KIOSK", "MOBILE", "WEB"]
+                    createdAt: "2025-09-01T00:00:00Z"
+                    updatedAt: "2025-11-01T00:00:00Z"
+                  - id: "itm_01HX7B3ABCDEFGHJKMNPQRSU"
+                    name: "Peak Milk 400g"
+                    description: "Peak evaporated milk, 400g tin"
+                    itemType: "PHYSICAL_PRODUCT"
+                    categoryId: "cat_01HX7B3DEFGHJKMNPQRSTUVX"
+                    categoryName: "Groceries"
+                    sku: "PEAK-MILK-400G"
+                    price:
+                      amount: 175000
+                      currency: "NGN"
+                    imageUrl: "https://cdn.ivm.ng/catalog/peak-milk-400g.png"
+                    available: true
+                    channelTypes: ["KIOSK", "STORE"]
+                    inventoryCount: 42
+                    createdAt: "2025-09-01T00:00:00Z"
+                    updatedAt: "2025-11-05T00:00:00Z"
+                pagination:
+                  cursor: "eyJpZCI6Iml0bV8wMUhYN0IzQUJDREVGR0hKS01OUFFSU1UifQ=="
+                  hasMore: true
+                  limit: 20
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    post:
+      operationId: createCatalogItem
+      tags:
+        - Items
+      summary: Create catalog item (operator)
+      description: |
+        Creates a new catalog item. Requires operator or admin role.
+        Items can be associated with specific channels and sites.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - itemType
+                - categoryId
+                - price
+              properties:
+                name:
+                  type: string
+                  maxLength: 255
+                  example: "Glo Data Bundle 2GB"
+                description:
+                  type: string
+                  maxLength: 2000
+                  example: "Glo Nigeria data bundle, 2GB valid for 30 days"
+                itemType:
+                  $ref: "#/components/schemas/ItemType"
+                categoryId:
+                  type: string
+                  example: "cat_01HX7B3DEFGHJKMNPQRSTUVW"
+                sku:
+                  type: string
+                  example: "GLO-DATA-2GB-30D"
+                price:
+                  $ref: "#/components/schemas/Money"
+                imageUrl:
+                  type: string
+                  format: uri
+                  example: "https://cdn.ivm.ng/catalog/glo-data-2gb.png"
+                channelTypes:
+                  type: array
+                  items:
+                    type: string
+                    enum: [KIOSK, LOCKER, STORE, MOBILE, WEB]
+                  example: ["KIOSK", "MOBILE", "WEB"]
+                siteIds:
+                  type: array
+                  items:
+                    type: string
+                  description: Restrict to specific sites (empty = all sites)
+                  example: []
+                attributes:
+                  type: object
+                  additionalProperties: true
+                  description: Flexible attributes specific to the item type
+                  example:
+                    dataAmount: "2GB"
+                    validityDays: 30
+                    network: "GLO"
+                available:
+                  type: boolean
+                  default: true
+            example:
+              name: "Glo Data Bundle 2GB"
+              description: "Glo Nigeria data bundle, 2GB valid for 30 days"
+              itemType: "DIGITAL_SERVICE"
+              categoryId: "cat_01HX7B3DEFGHJKMNPQRSTUVW"
+              sku: "GLO-DATA-2GB-30D"
+              price:
+                amount: 200000
+                currency: "NGN"
+              imageUrl: "https://cdn.ivm.ng/catalog/glo-data-2gb.png"
+              channelTypes: ["KIOSK", "MOBILE", "WEB"]
+              attributes:
+                dataAmount: "2GB"
+                validityDays: 30
+                network: "GLO"
+      responses:
+        "201":
+          description: Catalog item created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogItem"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Duplicate SKU
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/duplicate-sku"
+                title: "Duplicate SKU"
+                status: 409
+                detail: "An item with SKU 'GLO-DATA-2GB-30D' already exists."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/catalog/items/{id}:
+    get:
+      operationId: getCatalogItem
+      tags:
+        - Items
+      summary: Get item detail
+      description: Returns the full detail of a catalog item including pricing, attributes, and availability.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^itm_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+      responses:
+        "200":
+          description: Catalog item retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogItem"
+              example:
+                id: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+                name: "MTN Airtime N1000"
+                description: "MTN Nigeria airtime top-up, N1,000 denomination"
+                itemType: "DIGITAL_SERVICE"
+                categoryId: "cat_01HX7B3DEFGHJKMNPQRSTUVW"
+                categoryName: "Airtime & Data"
+                sku: "MTN-AIR-1000"
+                price:
+                  amount: 100000
+                  currency: "NGN"
+                imageUrl: "https://cdn.ivm.ng/catalog/mtn-airtime-1000.png"
+                available: true
+                channelTypes: ["KIOSK", "MOBILE", "WEB"]
+                attributes:
+                  network: "MTN"
+                  denomination: 1000
+                  validityDays: 0
+                activePromotions:
+                  - id: "promo_01HX7B3GHJKMNPQRSTUVWXYZ"
+                    name: "Weekend Airtime Bonus"
+                    discountPercent: 5
+                    validUntil: "2025-12-31T23:59:59Z"
+                createdAt: "2025-09-01T00:00:00Z"
+                updatedAt: "2025-11-01T00:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    patch:
+      operationId: updateCatalogItem
+      tags:
+        - Items
+      summary: Update catalog item
+      description: Partially updates a catalog item. Requires operator or admin role.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^itm_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  maxLength: 255
+                description:
+                  type: string
+                  maxLength: 2000
+                price:
+                  $ref: "#/components/schemas/Money"
+                imageUrl:
+                  type: string
+                  format: uri
+                channelTypes:
+                  type: array
+                  items:
+                    type: string
+                    enum: [KIOSK, LOCKER, STORE, MOBILE, WEB]
+                available:
+                  type: boolean
+                attributes:
+                  type: object
+                  additionalProperties: true
+            example:
+              price:
+                amount: 95000
+                currency: "NGN"
+              available: true
+      responses:
+        "200":
+          description: Catalog item updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogItem"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/catalog/categories:
+    get:
+      operationId: listCategories
+      tags:
+        - Categories
+      summary: List categories
+      description: Returns all catalog categories in a hierarchical structure.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: parentId
+          in: query
+          required: false
+          description: Filter by parent category (null for root categories)
+          schema:
+            type: string
+            nullable: true
+            example: null
+      responses:
+        "200":
+          description: Categories retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Category"
+              example:
+                data:
+                  - id: "cat_01HX7B3DEFGHJKMNPQRSTUVW"
+                    name: "Airtime & Data"
+                    slug: "airtime-data"
+                    description: "Mobile airtime and data bundles"
+                    parentId: null
+                    imageUrl: "https://cdn.ivm.ng/categories/airtime-data.png"
+                    itemCount: 45
+                    sortOrder: 1
+                    active: true
+                    children:
+                      - id: "cat_01HX7B3DEFGHJKMNPQRSTUVY"
+                        name: "Airtime"
+                        slug: "airtime"
+                        parentId: "cat_01HX7B3DEFGHJKMNPQRSTUVW"
+                        itemCount: 20
+                        sortOrder: 1
+                        active: true
+                      - id: "cat_01HX7B3DEFGHJKMNPQRSTUVZ"
+                        name: "Data Bundles"
+                        slug: "data-bundles"
+                        parentId: "cat_01HX7B3DEFGHJKMNPQRSTUVW"
+                        itemCount: 25
+                        sortOrder: 2
+                        active: true
+                  - id: "cat_01HX7B3DEFGHJKMNPQRSTUVX"
+                    name: "Groceries"
+                    slug: "groceries"
+                    description: "Food and household items"
+                    parentId: null
+                    imageUrl: "https://cdn.ivm.ng/categories/groceries.png"
+                    itemCount: 128
+                    sortOrder: 2
+                    active: true
+                  - id: "cat_01HX7B3DEFGHJKMNPQRSTUV1"
+                    name: "Insurance"
+                    slug: "insurance"
+                    description: "Micro-insurance products"
+                    parentId: null
+                    imageUrl: "https://cdn.ivm.ng/categories/insurance.png"
+                    itemCount: 12
+                    sortOrder: 3
+                    active: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    post:
+      operationId: createCategory
+      tags:
+        - Categories
+      summary: Create category
+      description: Creates a new catalog category. Supports hierarchical nesting. Requires operator or admin role.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+              properties:
+                name:
+                  type: string
+                  maxLength: 100
+                  example: "SIM Cards"
+                slug:
+                  type: string
+                  pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$'
+                  example: "sim-cards"
+                description:
+                  type: string
+                  maxLength: 500
+                  example: "SIM card activation and registration"
+                parentId:
+                  type: string
+                  nullable: true
+                  description: Parent category ID for nesting
+                  example: null
+                imageUrl:
+                  type: string
+                  format: uri
+                  example: "https://cdn.ivm.ng/categories/sim-cards.png"
+                sortOrder:
+                  type: integer
+                  default: 0
+                  example: 4
+            example:
+              name: "SIM Cards"
+              slug: "sim-cards"
+              description: "SIM card activation and registration"
+              parentId: null
+              imageUrl: "https://cdn.ivm.ng/categories/sim-cards.png"
+              sortOrder: 4
+      responses:
+        "201":
+          description: Category created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Duplicate slug
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/catalog/items/{id}/price:
+    get:
+      operationId: getResolvedPrice
+      tags:
+        - Pricing
+      summary: Get resolved price
+      description: |
+        Returns the fully resolved price for a catalog item, taking into account
+        the customer's tier, channel, site, active promotions, and any applicable
+        discounts. The resolved price may differ from the base catalog price.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^itm_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+        - name: channelType
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [KIOSK, LOCKER, STORE, MOBILE, WEB]
+            example: "KIOSK"
+        - name: siteId
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+        - name: customerId
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+        - name: quantity
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+            example: 2
+      responses:
+        "200":
+          description: Resolved price returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  itemId:
+                    type: string
+                    example: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+                  basePrice:
+                    $ref: "#/components/schemas/Money"
+                  resolvedPrice:
+                    $ref: "#/components/schemas/Money"
+                  quantity:
+                    type: integer
+                    example: 2
+                  totalPrice:
+                    $ref: "#/components/schemas/Money"
+                  appliedPromotions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        promotionId:
+                          type: string
+                        name:
+                          type: string
+                        discountAmount:
+                          $ref: "#/components/schemas/Money"
+                  priceBreakdown:
+                    type: object
+                    properties:
+                      subtotal:
+                        $ref: "#/components/schemas/Money"
+                      discount:
+                        $ref: "#/components/schemas/Money"
+                      tax:
+                        $ref: "#/components/schemas/Money"
+                      total:
+                        $ref: "#/components/schemas/Money"
+              example:
+                itemId: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+                basePrice:
+                  amount: 100000
+                  currency: "NGN"
+                resolvedPrice:
+                  amount: 95000
+                  currency: "NGN"
+                quantity: 2
+                totalPrice:
+                  amount: 190000
+                  currency: "NGN"
+                appliedPromotions:
+                  - promotionId: "promo_01HX7B3GHJKMNPQRSTUVWXYZ"
+                    name: "Weekend Airtime Bonus"
+                    discountAmount:
+                      amount: 5000
+                      currency: "NGN"
+                priceBreakdown:
+                  subtotal:
+                    amount: 200000
+                    currency: "NGN"
+                  discount:
+                    amount: 10000
+                    currency: "NGN"
+                  tax:
+                    amount: 0
+                    currency: "NGN"
+                  total:
+                    amount: 190000
+                    currency: "NGN"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/catalog/price/calculate:
+    post:
+      operationId: calculateBasketPrice
+      tags:
+        - Pricing
+      summary: Calculate basket price
+      description: |
+        Calculates the total price for a basket of items, applying all applicable
+        promotions, bundle discounts, and tax rules. Used during checkout preview.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - items
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required:
+                      - itemId
+                      - quantity
+                    properties:
+                      itemId:
+                        type: string
+                        example: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+                      quantity:
+                        type: integer
+                        minimum: 1
+                        example: 2
+                channelType:
+                  type: string
+                  enum: [KIOSK, LOCKER, STORE, MOBILE, WEB]
+                  example: "KIOSK"
+                siteId:
+                  type: string
+                  example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+                customerId:
+                  type: string
+                  example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                promotionCodes:
+                  type: array
+                  items:
+                    type: string
+                  description: Optional promotion/coupon codes to apply
+                  example: ["WELCOME10"]
+            example:
+              items:
+                - itemId: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+                  quantity: 2
+                - itemId: "itm_01HX7B3ABCDEFGHJKMNPQRSU"
+                  quantity: 1
+              channelType: "KIOSK"
+              siteId: "site_01HX7B3ABCDEFGHJKMNPQRST"
+              customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+              promotionCodes: ["WELCOME10"]
+      responses:
+        "200":
+          description: Basket price calculated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lineItems:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        itemId:
+                          type: string
+                        name:
+                          type: string
+                        quantity:
+                          type: integer
+                        unitPrice:
+                          $ref: "#/components/schemas/Money"
+                        lineTotal:
+                          $ref: "#/components/schemas/Money"
+                        appliedPromotions:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              promotionId:
+                                type: string
+                              name:
+                                type: string
+                              discountAmount:
+                                $ref: "#/components/schemas/Money"
+                  summary:
+                    type: object
+                    properties:
+                      subtotal:
+                        $ref: "#/components/schemas/Money"
+                      totalDiscount:
+                        $ref: "#/components/schemas/Money"
+                      tax:
+                        $ref: "#/components/schemas/Money"
+                      total:
+                        $ref: "#/components/schemas/Money"
+                      itemCount:
+                        type: integer
+                  invalidPromotionCodes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code:
+                          type: string
+                        reason:
+                          type: string
+              example:
+                lineItems:
+                  - itemId: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+                    name: "MTN Airtime N1000"
+                    quantity: 2
+                    unitPrice:
+                      amount: 100000
+                      currency: "NGN"
+                    lineTotal:
+                      amount: 180000
+                      currency: "NGN"
+                    appliedPromotions:
+                      - promotionId: "promo_01HX7B3GHJKMNPQRSTUVWXYZ"
+                        name: "WELCOME10"
+                        discountAmount:
+                          amount: 20000
+                          currency: "NGN"
+                  - itemId: "itm_01HX7B3ABCDEFGHJKMNPQRSU"
+                    name: "Peak Milk 400g"
+                    quantity: 1
+                    unitPrice:
+                      amount: 175000
+                      currency: "NGN"
+                    lineTotal:
+                      amount: 175000
+                      currency: "NGN"
+                    appliedPromotions: []
+                summary:
+                  subtotal:
+                    amount: 375000
+                    currency: "NGN"
+                  totalDiscount:
+                    amount: 20000
+                    currency: "NGN"
+                  tax:
+                    amount: 0
+                    currency: "NGN"
+                  total:
+                    amount: 355000
+                    currency: "NGN"
+                  itemCount: 3
+                invalidPromotionCodes: []
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/catalog/promotions:
+    get:
+      operationId: listPromotions
+      tags:
+        - Promotions
+      summary: List promotions
+      description: Returns active and upcoming promotions with optional filtering.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ACTIVE, SCHEDULED, EXPIRED, DISABLED]
+            example: "ACTIVE"
+        - name: channelType
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [KIOSK, LOCKER, STORE, MOBILE, WEB]
+      responses:
+        "200":
+          description: Promotions retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Promotion"
+                  pagination:
+                    $ref: "#/components/schemas/CursorPagination"
+              example:
+                data:
+                  - id: "promo_01HX7B3GHJKMNPQRSTUVWXYZ"
+                    name: "Weekend Airtime Bonus"
+                    description: "Get 5% discount on all airtime purchases every weekend"
+                    type: "PERCENTAGE_DISCOUNT"
+                    discountPercent: 5
+                    code: null
+                    status: "ACTIVE"
+                    startDate: "2025-11-01T00:00:00Z"
+                    endDate: "2025-12-31T23:59:59Z"
+                    applicableItemTypes: ["DIGITAL_SERVICE"]
+                    applicableChannels: ["KIOSK", "MOBILE", "WEB"]
+                    conditions:
+                      minPurchaseAmount:
+                        amount: 50000
+                        currency: "NGN"
+                      daysOfWeek: ["SATURDAY", "SUNDAY"]
+                    usageLimit: null
+                    usageCount: 1542
+                    createdAt: "2025-10-25T00:00:00Z"
+                  - id: "promo_01HX7B3GHJKMNPQRSTUVWXY1"
+                    name: "New Customer Welcome"
+                    description: "10% off first purchase for new customers"
+                    type: "PERCENTAGE_DISCOUNT"
+                    discountPercent: 10
+                    code: "WELCOME10"
+                    status: "ACTIVE"
+                    startDate: "2025-09-01T00:00:00Z"
+                    endDate: "2026-03-31T23:59:59Z"
+                    applicableItemTypes: null
+                    applicableChannels: null
+                    conditions:
+                      firstPurchaseOnly: true
+                      maxDiscountAmount:
+                        amount: 500000
+                        currency: "NGN"
+                    usageLimit: 10000
+                    usageCount: 3287
+                    createdAt: "2025-08-25T00:00:00Z"
+                pagination:
+                  cursor: null
+                  hasMore: false
+                  limit: 20
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    post:
+      operationId: createPromotion
+      tags:
+        - Promotions
+      summary: Create promotion
+      description: Creates a new promotion. Requires operator or admin role.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - type
+                - startDate
+                - endDate
+              properties:
+                name:
+                  type: string
+                  maxLength: 255
+                  example: "Holiday Season Sale"
+                description:
+                  type: string
+                  maxLength: 2000
+                  example: "15% discount on all physical products during the holiday season"
+                type:
+                  type: string
+                  enum: [PERCENTAGE_DISCOUNT, FIXED_DISCOUNT, BUY_X_GET_Y, BUNDLE_DISCOUNT]
+                  example: "PERCENTAGE_DISCOUNT"
+                discountPercent:
+                  type: number
+                  format: float
+                  minimum: 0
+                  maximum: 100
+                  example: 15
+                discountAmount:
+                  $ref: "#/components/schemas/Money"
+                code:
+                  type: string
+                  nullable: true
+                  description: Optional promotion code (null for automatic promotions)
+                  example: null
+                startDate:
+                  type: string
+                  format: date-time
+                  example: "2025-12-15T00:00:00Z"
+                endDate:
+                  type: string
+                  format: date-time
+                  example: "2026-01-05T23:59:59Z"
+                applicableItemTypes:
+                  type: array
+                  nullable: true
+                  items:
+                    $ref: "#/components/schemas/ItemType"
+                  description: Null means applicable to all item types
+                  example: ["PHYSICAL_PRODUCT"]
+                applicableChannels:
+                  type: array
+                  nullable: true
+                  items:
+                    type: string
+                    enum: [KIOSK, LOCKER, STORE, MOBILE, WEB]
+                  description: Null means applicable to all channels
+                  example: ["KIOSK", "STORE"]
+                applicableItemIds:
+                  type: array
+                  nullable: true
+                  items:
+                    type: string
+                  description: Specific items this promotion applies to (null = all items matching type)
+                conditions:
+                  type: object
+                  additionalProperties: true
+                  description: Additional conditions for promotion eligibility
+                usageLimit:
+                  type: integer
+                  nullable: true
+                  description: Maximum total usages (null = unlimited)
+                  example: null
+            example:
+              name: "Holiday Season Sale"
+              description: "15% discount on all physical products during the holiday season"
+              type: "PERCENTAGE_DISCOUNT"
+              discountPercent: 15
+              startDate: "2025-12-15T00:00:00Z"
+              endDate: "2026-01-05T23:59:59Z"
+              applicableItemTypes: ["PHYSICAL_PRODUCT"]
+              applicableChannels: ["KIOSK", "STORE"]
+      responses:
+        "201":
+          description: Promotion created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Promotion"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token from the Identity service
+
+  parameters:
+    TenantId:
+      name: X-Tenant-ID
+      in: header
+      required: true
+      description: Tenant identifier for multi-tenant context
+      schema:
+        type: string
+        example: "tnt_01HX7B3ABCDEFGHJKMNPQRST"
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: Unique request identifier for tracing
+      schema:
+        type: string
+        format: uuid
+        example: "550e8400-e29b-41d4-a716-446655440000"
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque cursor for pagination
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of items to return
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  headers:
+    X-RateLimit-Limit:
+      description: Maximum number of requests allowed in the current window
+      schema:
+        type: integer
+        example: 100
+    X-RateLimit-Remaining:
+      description: Number of requests remaining in the current window
+      schema:
+        type: integer
+        example: 95
+    X-RateLimit-Reset:
+      description: Unix timestamp when the rate limit window resets
+      schema:
+        type: integer
+        format: int64
+        example: 1700045400
+
+  schemas:
+    CatalogItem:
+      type: object
+      required:
+        - id
+        - name
+        - itemType
+        - categoryId
+        - price
+        - available
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          pattern: '^itm_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "itm_01HX7B3ABCDEFGHJKMNPQRST"
+        name:
+          type: string
+          example: "MTN Airtime N1000"
+        description:
+          type: string
+          example: "MTN Nigeria airtime top-up, N1,000 denomination"
+        itemType:
+          $ref: "#/components/schemas/ItemType"
+        categoryId:
+          type: string
+          example: "cat_01HX7B3DEFGHJKMNPQRSTUVW"
+        categoryName:
+          type: string
+          example: "Airtime & Data"
+        sku:
+          type: string
+          example: "MTN-AIR-1000"
+        price:
+          $ref: "#/components/schemas/Money"
+        imageUrl:
+          type: string
+          format: uri
+          example: "https://cdn.ivm.ng/catalog/mtn-airtime-1000.png"
+        available:
+          type: boolean
+          example: true
+        channelTypes:
+          type: array
+          items:
+            type: string
+            enum: [KIOSK, LOCKER, STORE, MOBILE, WEB]
+          example: ["KIOSK", "MOBILE", "WEB"]
+        siteIds:
+          type: array
+          items:
+            type: string
+          description: Sites where this item is available (empty = all sites)
+        inventoryCount:
+          type: integer
+          nullable: true
+          description: Available inventory count (null for digital services)
+          example: null
+        attributes:
+          type: object
+          additionalProperties: true
+          description: Type-specific attributes
+          example:
+            network: "MTN"
+            denomination: 1000
+        activePromotions:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              discountPercent:
+                type: number
+              discountAmount:
+                $ref: "#/components/schemas/Money"
+              validUntil:
+                type: string
+                format: date-time
+        createdAt:
+          type: string
+          format: date-time
+          example: "2025-09-01T00:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2025-11-01T00:00:00Z"
+
+    ItemType:
+      type: string
+      enum:
+        - PHYSICAL_PRODUCT
+        - DIGITAL_SERVICE
+        - SIM_CARD
+        - INSURANCE_POLICY
+        - BANKING_SERVICE
+        - TICKET
+        - DOCUMENT_SERVICE
+      description: |
+        Type of catalog item:
+        - PHYSICAL_PRODUCT: Tangible goods
+        - DIGITAL_SERVICE: Airtime, data, subscriptions
+        - SIM_CARD: Telecom SIM cards
+        - INSURANCE_POLICY: Micro-insurance products
+        - BANKING_SERVICE: Account opening, transfers
+        - TICKET: Transport, event, lottery tickets
+        - DOCUMENT_SERVICE: Printing, scanning
+      example: "DIGITAL_SERVICE"
+
+    Category:
+      type: object
+      required:
+        - id
+        - name
+        - slug
+        - active
+      properties:
+        id:
+          type: string
+          pattern: '^cat_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "cat_01HX7B3DEFGHJKMNPQRSTUVW"
+        name:
+          type: string
+          example: "Airtime & Data"
+        slug:
+          type: string
+          example: "airtime-data"
+        description:
+          type: string
+          example: "Mobile airtime and data bundles"
+        parentId:
+          type: string
+          nullable: true
+          example: null
+        imageUrl:
+          type: string
+          format: uri
+          example: "https://cdn.ivm.ng/categories/airtime-data.png"
+        itemCount:
+          type: integer
+          example: 45
+        sortOrder:
+          type: integer
+          example: 1
+        active:
+          type: boolean
+          example: true
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/Category"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2025-08-01T00:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2025-11-01T00:00:00Z"
+
+    Promotion:
+      type: object
+      required:
+        - id
+        - name
+        - type
+        - status
+        - startDate
+        - endDate
+        - createdAt
+      properties:
+        id:
+          type: string
+          pattern: '^promo_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "promo_01HX7B3GHJKMNPQRSTUVWXYZ"
+        name:
+          type: string
+          example: "Weekend Airtime Bonus"
+        description:
+          type: string
+          example: "Get 5% discount on all airtime purchases every weekend"
+        type:
+          type: string
+          enum: [PERCENTAGE_DISCOUNT, FIXED_DISCOUNT, BUY_X_GET_Y, BUNDLE_DISCOUNT]
+          example: "PERCENTAGE_DISCOUNT"
+        discountPercent:
+          type: number
+          format: float
+          nullable: true
+          example: 5
+        discountAmount:
+          allOf:
+            - $ref: "#/components/schemas/Money"
+          nullable: true
+        code:
+          type: string
+          nullable: true
+          description: Promotion code (null for automatic promotions)
+          example: null
+        status:
+          type: string
+          enum: [ACTIVE, SCHEDULED, EXPIRED, DISABLED]
+          example: "ACTIVE"
+        startDate:
+          type: string
+          format: date-time
+          example: "2025-11-01T00:00:00Z"
+        endDate:
+          type: string
+          format: date-time
+          example: "2025-12-31T23:59:59Z"
+        applicableItemTypes:
+          type: array
+          nullable: true
+          items:
+            $ref: "#/components/schemas/ItemType"
+        applicableChannels:
+          type: array
+          nullable: true
+          items:
+            type: string
+            enum: [KIOSK, LOCKER, STORE, MOBILE, WEB]
+        applicableItemIds:
+          type: array
+          nullable: true
+          items:
+            type: string
+        conditions:
+          type: object
+          additionalProperties: true
+        usageLimit:
+          type: integer
+          nullable: true
+          example: null
+        usageCount:
+          type: integer
+          example: 1542
+        createdAt:
+          type: string
+          format: date-time
+          example: "2025-10-25T00:00:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2025-11-01T00:00:00Z"
+
+    Money:
+      type: object
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          type: integer
+          description: Amount in minor currency units (kobo for NGN)
+          example: 100000
+        currency:
+          type: string
+          description: ISO 4217 currency code
+          pattern: '^[A-Z]{3}$'
+          example: "NGN"
+
+    CursorPagination:
+      type: object
+      properties:
+        cursor:
+          type: string
+          nullable: true
+          description: Opaque cursor for the next page
+        hasMore:
+          type: boolean
+        limit:
+          type: integer
+
+    ProblemDetail:
+      type: object
+      description: RFC 7807 Problem Details for HTTP APIs
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+          example: "https://api.ivm.ng/problems/validation-error"
+        title:
+          type: string
+          example: "Validation Error"
+        status:
+          type: integer
+          example: 400
+        detail:
+          type: string
+        instance:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+              code:
+                type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters or body
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/validation-error"
+            title: "Validation Error"
+            status: 400
+            detail: "The request body contains invalid fields."
+
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/unauthorized"
+            title: "Unauthorized"
+            status: 401
+            detail: "The access token is missing, invalid, or expired."
+
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/forbidden"
+            title: "Forbidden"
+            status: 403
+            detail: "You do not have permission to perform this action."
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/not-found"
+            title: "Not Found"
+            status: 404
+            detail: "The requested resource was not found."
+
+    InternalServerError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/internal-error"
+            title: "Internal Server Error"
+            status: 500
+            detail: "An unexpected error occurred. Please try again later."
+
+security:
+  - BearerAuth: []

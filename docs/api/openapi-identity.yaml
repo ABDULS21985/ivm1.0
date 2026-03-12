@@ -1,0 +1,1002 @@
+openapi: "3.0.3"
+info:
+  title: IVM Platform - Identity & Authentication Service
+  description: |
+    Identity and authentication service for the IVM Platform. Handles user registration,
+    multi-factor authentication (password + OTP), JWT token lifecycle, and device identity
+    management with mTLS certificate exchange.
+
+    ## Authentication Flows
+    - **Password-based**: Email/phone + password -> JWT access + refresh tokens
+    - **OTP-based**: Request OTP to phone/email -> verify OTP -> JWT tokens
+    - **Device mTLS**: Device enrolls with CSR -> receives signed certificate -> authenticates via mTLS
+
+    ## ID Format
+    All entity IDs use prefixed ULIDs:
+    - Users: `usr_01HX7B3ABC...`
+    - Devices: `dev_01HX7B3DEF...`
+
+    ## Error Format
+    All errors follow RFC 7807 Problem Details.
+  version: "1.0.0"
+  contact:
+    name: IVM Platform Engineering
+    email: platform@ivm.ng
+  license:
+    name: Proprietary
+    url: https://ivm.ng/terms
+
+servers:
+  - url: https://api.ivm.ng
+    description: Production
+  - url: https://api.staging.ivm.ng
+    description: Staging
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: Authentication
+    description: User authentication and token management
+  - name: Device Identity
+    description: Device enrollment and authentication via mTLS
+
+paths:
+  /api/v1/auth/register:
+    post:
+      operationId: registerUser
+      tags:
+        - Authentication
+      summary: Register new user
+      description: |
+        Creates a new user account. Requires at minimum an email or phone number
+        and a password. The user starts with default permissions and TIER_0 KYC status.
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "adewale.okonkwo@gmail.com"
+                phone:
+                  type: string
+                  pattern: '^\+234\d{10}$'
+                  example: "+2348012345678"
+                password:
+                  type: string
+                  format: password
+                  minLength: 8
+                  maxLength: 128
+                  example: "S3cur3P@ssw0rd!"
+                firstName:
+                  type: string
+                  example: "Adewale"
+                lastName:
+                  type: string
+                  example: "Okonkwo"
+              oneOf:
+                - required: [email]
+                - required: [phone]
+            example:
+              email: "adewale.okonkwo@gmail.com"
+              phone: "+2348012345678"
+              password: "S3cur3P@ssw0rd!"
+              firstName: "Adewale"
+              lastName: "Okonkwo"
+      responses:
+        "201":
+          description: User registered successfully
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/User"
+                  tokens:
+                    $ref: "#/components/schemas/AuthTokens"
+              example:
+                user:
+                  id: "usr_01HX7B3ABCDEFGHJKMNPQRST"
+                  email: "adewale.okonkwo@gmail.com"
+                  phone: "+2348012345678"
+                  firstName: "Adewale"
+                  lastName: "Okonkwo"
+                  roles:
+                    - id: "rol_01HX7B3ABCDEFGHJKMNPQRSU"
+                      name: "customer"
+                      permissions:
+                        - "read:profile"
+                        - "write:profile"
+                        - "read:orders"
+                        - "create:orders"
+                  status: "ACTIVE"
+                  createdAt: "2025-11-15T10:30:00Z"
+                  updatedAt: "2025-11-15T10:30:00Z"
+                tokens:
+                  accessToken: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  refreshToken: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  tokenType: "Bearer"
+                  expiresIn: 900
+                  refreshExpiresIn: 604800
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          description: User already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/user-already-exists"
+                title: "User Already Exists"
+                status: 409
+                detail: "A user with this email address already exists."
+                instance: "/api/v1/auth/register"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/auth/login:
+    post:
+      operationId: loginUser
+      tags:
+        - Authentication
+      summary: Authenticate user
+      description: |
+        Authenticates a user with email/phone and password. Returns JWT access and refresh tokens.
+        For OTP-based authentication, use the `/auth/login/otp/request` and `/auth/login/otp/verify` endpoints.
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "adewale.okonkwo@gmail.com"
+                phone:
+                  type: string
+                  pattern: '^\+234\d{10}$'
+                  example: "+2348012345678"
+                password:
+                  type: string
+                  format: password
+                  example: "S3cur3P@ssw0rd!"
+              oneOf:
+                - required: [email]
+                - required: [phone]
+            example:
+              email: "adewale.okonkwo@gmail.com"
+              password: "S3cur3P@ssw0rd!"
+      responses:
+        "200":
+          description: Authentication successful
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/User"
+                  tokens:
+                    $ref: "#/components/schemas/AuthTokens"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/invalid-credentials"
+                title: "Invalid Credentials"
+                status: 401
+                detail: "The email or password provided is incorrect."
+                instance: "/api/v1/auth/login"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/auth/login/otp/request:
+    post:
+      operationId: requestOtp
+      tags:
+        - Authentication
+      summary: Request OTP
+      description: |
+        Sends a one-time password to the user's registered phone number or email.
+        OTP is valid for 5 minutes. Rate limited to prevent abuse.
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "adewale.okonkwo@gmail.com"
+                phone:
+                  type: string
+                  pattern: '^\+234\d{10}$'
+                  example: "+2348012345678"
+                channel:
+                  type: string
+                  enum: [SMS, EMAIL, WHATSAPP]
+                  default: SMS
+                  example: "SMS"
+              oneOf:
+                - required: [email]
+                - required: [phone]
+            example:
+              phone: "+2348012345678"
+              channel: "SMS"
+      responses:
+        "200":
+          description: OTP sent successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  otpRequestId:
+                    type: string
+                    example: "otp_01HX7B3ABCDEFGHJKMNPQRST"
+                  expiresAt:
+                    type: string
+                    format: date-time
+                    example: "2025-11-15T10:35:00Z"
+                  channel:
+                    type: string
+                    enum: [SMS, EMAIL, WHATSAPP]
+                    example: "SMS"
+                  maskedTarget:
+                    type: string
+                    description: Masked phone or email for display
+                    example: "+234801****678"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/auth/login/otp/verify:
+    post:
+      operationId: verifyOtp
+      tags:
+        - Authentication
+      summary: Verify OTP
+      description: |
+        Verifies the one-time password and returns JWT tokens on success.
+        Maximum 3 attempts per OTP request before invalidation.
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - otpRequestId
+                - otp
+              properties:
+                otpRequestId:
+                  type: string
+                  example: "otp_01HX7B3ABCDEFGHJKMNPQRST"
+                otp:
+                  type: string
+                  pattern: '^\d{6}$'
+                  example: "482916"
+            example:
+              otpRequestId: "otp_01HX7B3ABCDEFGHJKMNPQRST"
+              otp: "482916"
+      responses:
+        "200":
+          description: OTP verified, authentication successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/User"
+                  tokens:
+                    $ref: "#/components/schemas/AuthTokens"
+        "401":
+          description: Invalid or expired OTP
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/invalid-otp"
+                title: "Invalid OTP"
+                status: 401
+                detail: "The OTP provided is invalid or has expired."
+                instance: "/api/v1/auth/login/otp/verify"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/auth/token/refresh:
+    post:
+      operationId: refreshToken
+      tags:
+        - Authentication
+      summary: Refresh access token
+      description: |
+        Exchanges a valid refresh token for a new access token and optionally
+        a new refresh token (rotation). The old refresh token is invalidated.
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refreshToken
+              properties:
+                refreshToken:
+                  type: string
+                  description: Current valid refresh token
+                  example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+      responses:
+        "200":
+          description: Token refreshed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokens"
+              example:
+                accessToken: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+                refreshToken: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+                tokenType: "Bearer"
+                expiresIn: 900
+                refreshExpiresIn: 604800
+        "401":
+          description: Invalid or expired refresh token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/invalid-refresh-token"
+                title: "Invalid Refresh Token"
+                status: 401
+                detail: "The refresh token is invalid, expired, or has been revoked."
+                instance: "/api/v1/auth/token/refresh"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/auth/logout:
+    post:
+      operationId: logoutUser
+      tags:
+        - Authentication
+      summary: Invalidate session
+      description: |
+        Invalidates the current access and refresh tokens, effectively logging
+        the user out. The tokens are added to a deny list.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken:
+                  type: string
+                  description: Optional refresh token to also invalidate
+                allSessions:
+                  type: boolean
+                  default: false
+                  description: If true, invalidate all sessions for this user
+      responses:
+        "204":
+          description: Session invalidated successfully
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/auth/device/enroll:
+    post:
+      operationId: enrollDevice
+      tags:
+        - Device Identity
+      summary: Enroll device (mTLS cert exchange)
+      description: |
+        Enrolls a new device in the platform. The device submits a Certificate Signing
+        Request (CSR) and receives a signed X.509 certificate for mTLS authentication.
+        This endpoint requires operator-level authentication.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - deviceType
+                - serialNumber
+                - csr
+              properties:
+                deviceType:
+                  type: string
+                  enum:
+                    - VENDING_MACHINE
+                    - SMART_LOCKER
+                    - POS_TERMINAL
+                    - KIOSK
+                    - CAMERA
+                    - WEIGHT_SENSOR
+                    - RFID_READER
+                    - NFC_READER
+                    - BIOMETRIC_SCANNER
+                    - DISPLAY_SCREEN
+                  example: "VENDING_MACHINE"
+                serialNumber:
+                  type: string
+                  example: "IVM-VM-2025-NG-00142"
+                csr:
+                  type: string
+                  description: PEM-encoded PKCS#10 Certificate Signing Request
+                  example: "-----BEGIN CERTIFICATE REQUEST-----\nMIIC..."
+                siteId:
+                  type: string
+                  example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+                metadata:
+                  type: object
+                  additionalProperties: true
+                  example:
+                    manufacturer: "IVM Technologies"
+                    model: "VM-500X"
+                    firmwareVersion: "2.1.0"
+            example:
+              deviceType: "VENDING_MACHINE"
+              serialNumber: "IVM-VM-2025-NG-00142"
+              csr: "-----BEGIN CERTIFICATE REQUEST-----\nMIIC..."
+              siteId: "site_01HX7B3ABCDEFGHJKMNPQRST"
+              metadata:
+                manufacturer: "IVM Technologies"
+                model: "VM-500X"
+                firmwareVersion: "2.1.0"
+      responses:
+        "201":
+          description: Device enrolled successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device:
+                    $ref: "#/components/schemas/DeviceIdentity"
+                  certificate:
+                    type: string
+                    description: PEM-encoded signed X.509 certificate
+                    example: "-----BEGIN CERTIFICATE-----\nMIID..."
+                  caCertificate:
+                    type: string
+                    description: PEM-encoded CA certificate for chain validation
+                    example: "-----BEGIN CERTIFICATE-----\nMIID..."
+                  certificateExpiresAt:
+                    type: string
+                    format: date-time
+                    example: "2026-11-15T10:30:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Device serial number already enrolled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/auth/device/authenticate:
+    post:
+      operationId: authenticateDevice
+      tags:
+        - Device Identity
+      summary: Device authentication
+      description: |
+        Authenticates a device using its mTLS client certificate. The device presents
+        its certificate during TLS handshake, and this endpoint validates the identity
+        and returns a device-scoped JWT token.
+      security:
+        - mTLS: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nonce:
+                  type: string
+                  description: Optional challenge nonce for replay protection
+                  example: "a1b2c3d4e5f6"
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                  description: Current device capabilities to report
+                  example: ["DISPENSE", "ACCEPT_PAYMENT", "PRINT_RECEIPT"]
+      responses:
+        "200":
+          description: Device authenticated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  device:
+                    $ref: "#/components/schemas/DeviceIdentity"
+                  tokens:
+                    $ref: "#/components/schemas/AuthTokens"
+                  configVersion:
+                    type: string
+                    description: Latest configuration version for sync
+                    example: "cfg_v42"
+        "401":
+          description: Certificate invalid or revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/device-certificate-invalid"
+                title: "Device Certificate Invalid"
+                status: 401
+                detail: "The device certificate is invalid, expired, or has been revoked."
+                instance: "/api/v1/auth/device/authenticate"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT access token obtained from login or token refresh endpoints.
+        Include in Authorization header: `Bearer <token>`
+    mTLS:
+      type: mutualTLS
+      description: |
+        Mutual TLS authentication using X.509 client certificates issued
+        during device enrollment. The client presents its certificate
+        during the TLS handshake.
+
+  parameters:
+    TenantId:
+      name: X-Tenant-ID
+      in: header
+      required: true
+      description: Tenant identifier for multi-tenant context
+      schema:
+        type: string
+        example: "tnt_01HX7B3ABCDEFGHJKMNPQRST"
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: Unique request identifier for tracing
+      schema:
+        type: string
+        format: uuid
+        example: "550e8400-e29b-41d4-a716-446655440000"
+
+  headers:
+    X-RateLimit-Limit:
+      description: Maximum number of requests allowed in the current window
+      schema:
+        type: integer
+        example: 100
+    X-RateLimit-Remaining:
+      description: Number of requests remaining in the current window
+      schema:
+        type: integer
+        example: 95
+    X-RateLimit-Reset:
+      description: Unix timestamp when the rate limit window resets
+      schema:
+        type: integer
+        format: int64
+        example: 1700045400
+
+  schemas:
+    User:
+      type: object
+      required:
+        - id
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          description: Prefixed ULID identifier
+          pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "usr_01HX7B3ABCDEFGHJKMNPQRST"
+        email:
+          type: string
+          format: email
+          example: "adewale.okonkwo@gmail.com"
+        phone:
+          type: string
+          pattern: '^\+234\d{10}$'
+          example: "+2348012345678"
+        firstName:
+          type: string
+          example: "Adewale"
+        lastName:
+          type: string
+          example: "Okonkwo"
+        roles:
+          type: array
+          items:
+            $ref: "#/components/schemas/Role"
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE, SUSPENDED, PENDING_VERIFICATION]
+          example: "ACTIVE"
+        lastLoginAt:
+          type: string
+          format: date-time
+          example: "2025-11-15T10:30:00Z"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2025-11-15T10:30:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2025-11-15T10:30:00Z"
+
+    Role:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          pattern: '^rol_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "rol_01HX7B3ABCDEFGHJKMNPQRSU"
+        name:
+          type: string
+          enum: [super_admin, admin, operator, agent, customer]
+          example: "customer"
+        description:
+          type: string
+          example: "End-user customer role"
+        permissions:
+          type: array
+          items:
+            type: string
+          example:
+            - "read:profile"
+            - "write:profile"
+            - "read:orders"
+            - "create:orders"
+
+    Permission:
+      type: object
+      required:
+        - id
+        - resource
+        - action
+      properties:
+        id:
+          type: string
+          pattern: '^perm_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "perm_01HX7B3ABCDEFGHJKMNPQRSV"
+        resource:
+          type: string
+          example: "orders"
+        action:
+          type: string
+          enum: [create, read, update, delete, admin]
+          example: "read"
+        scope:
+          type: string
+          enum: [own, tenant, global]
+          default: "own"
+          example: "own"
+
+    DeviceIdentity:
+      type: object
+      required:
+        - id
+        - deviceType
+        - serialNumber
+        - status
+        - createdAt
+      properties:
+        id:
+          type: string
+          description: Prefixed ULID identifier
+          pattern: '^dev_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+        deviceType:
+          type: string
+          enum:
+            - VENDING_MACHINE
+            - SMART_LOCKER
+            - POS_TERMINAL
+            - KIOSK
+            - CAMERA
+            - WEIGHT_SENSOR
+            - RFID_READER
+            - NFC_READER
+            - BIOMETRIC_SCANNER
+            - DISPLAY_SCREEN
+          example: "VENDING_MACHINE"
+        serialNumber:
+          type: string
+          example: "IVM-VM-2025-NG-00142"
+        siteId:
+          type: string
+          example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE, REVOKED, PENDING_ENROLLMENT]
+          example: "ACTIVE"
+        certificateFingerprint:
+          type: string
+          description: SHA-256 fingerprint of the device certificate
+          example: "SHA256:xK3d9..."
+        certificateExpiresAt:
+          type: string
+          format: date-time
+          example: "2026-11-15T10:30:00Z"
+        lastAuthenticatedAt:
+          type: string
+          format: date-time
+          example: "2025-11-15T10:30:00Z"
+        metadata:
+          type: object
+          additionalProperties: true
+          example:
+            manufacturer: "IVM Technologies"
+            model: "VM-500X"
+            firmwareVersion: "2.1.0"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2025-11-15T10:30:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2025-11-15T10:30:00Z"
+
+    AuthTokens:
+      type: object
+      required:
+        - accessToken
+        - refreshToken
+        - tokenType
+        - expiresIn
+      properties:
+        accessToken:
+          type: string
+          description: JWT access token (short-lived, 15 minutes)
+          example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+        refreshToken:
+          type: string
+          description: JWT refresh token (long-lived, 7 days)
+          example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+        tokenType:
+          type: string
+          enum: [Bearer]
+          example: "Bearer"
+        expiresIn:
+          type: integer
+          description: Access token TTL in seconds
+          example: 900
+        refreshExpiresIn:
+          type: integer
+          description: Refresh token TTL in seconds
+          example: 604800
+
+    ProblemDetail:
+      type: object
+      description: RFC 7807 Problem Details for HTTP APIs
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+          description: URI reference identifying the problem type
+          example: "https://api.ivm.ng/problems/validation-error"
+        title:
+          type: string
+          description: Short, human-readable summary
+          example: "Validation Error"
+        status:
+          type: integer
+          description: HTTP status code
+          example: 400
+        detail:
+          type: string
+          description: Human-readable explanation specific to this occurrence
+          example: "The 'email' field must be a valid email address."
+        instance:
+          type: string
+          description: URI reference identifying the specific occurrence
+          example: "/api/v1/auth/register"
+        errors:
+          type: array
+          description: Detailed validation errors
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+                example: "email"
+              message:
+                type: string
+                example: "Must be a valid email address"
+              code:
+                type: string
+                example: "INVALID_FORMAT"
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters or body
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/validation-error"
+            title: "Validation Error"
+            status: 400
+            detail: "The request body contains invalid fields."
+            instance: "/api/v1/auth/register"
+            errors:
+              - field: "email"
+                message: "Must be a valid email address"
+                code: "INVALID_FORMAT"
+
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/unauthorized"
+            title: "Unauthorized"
+            status: 401
+            detail: "The access token is missing, invalid, or expired."
+            instance: "/api/v1/auth/logout"
+
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/forbidden"
+            title: "Forbidden"
+            status: 403
+            detail: "You do not have permission to perform this action."
+            instance: "/api/v1/auth/device/enroll"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/not-found"
+            title: "Not Found"
+            status: 404
+            detail: "The requested resource was not found."
+            instance: "/api/v1/auth/login/otp/request"
+
+    TooManyRequests:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          description: Seconds until the rate limit resets
+          schema:
+            type: integer
+            example: 60
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/rate-limit-exceeded"
+            title: "Too Many Requests"
+            status: 429
+            detail: "Rate limit exceeded. Please retry after 60 seconds."
+            instance: "/api/v1/auth/login"
+
+    InternalServerError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/internal-error"
+            title: "Internal Server Error"
+            status: 500
+            detail: "An unexpected error occurred. Please try again later."
+            instance: "/api/v1/auth/register"
+
+security:
+  - BearerAuth: []

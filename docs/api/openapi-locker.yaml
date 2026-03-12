@@ -1,0 +1,1244 @@
+openapi: "3.0.3"
+info:
+  title: IVM Platform - Locker Module
+  description: |
+    Smart locker management module for the IVM Platform. Handles locker bank management,
+    compartment reservations, deposit/pickup workflows, and access code verification.
+
+    ## Locker Workflow
+    1. Customer reserves a compartment via API or kiosk
+    2. Sender deposits item and locks compartment (LOADED)
+    3. System generates access code and notifies recipient (READY_FOR_PICKUP)
+    4. Recipient verifies access code and picks up item (PICKED_UP)
+
+    ## Compartment Sizes
+    - SMALL: Documents, small packages (30x20x15 cm)
+    - MEDIUM: Standard packages (40x30x25 cm)
+    - LARGE: Large packages (50x40x35 cm)
+    - XL: Extra-large items (60x50x45 cm)
+    - REFRIGERATED: Temperature-controlled (40x30x25 cm, 2-8 deg C)
+
+    ## Access Codes
+    Access codes are 6-digit numeric codes valid for a configurable duration.
+    They can be delivered via SMS, email, or displayed on-screen.
+
+    ## ID Format
+    - Locker banks: `lbnk_01HX7B3ABC...`
+    - Compartments: `comp_01HX7B3DEF...`
+    - Reservations: `lrsv_01HX7B3GHJ...`
+  version: "1.0.0"
+  contact:
+    name: IVM Platform Engineering
+    email: platform@ivm.ng
+  license:
+    name: Proprietary
+    url: https://ivm.ng/terms
+
+servers:
+  - url: https://api.ivm.ng
+    description: Production
+  - url: https://api.staging.ivm.ng
+    description: Staging
+  - url: http://localhost:8086
+    description: Local development
+
+tags:
+  - name: Locker Banks
+    description: Locker bank management and availability
+  - name: Reservations
+    description: Compartment reservations and workflows
+  - name: Access
+    description: Access code management and verification
+
+paths:
+  /api/v1/lockers/banks:
+    get:
+      operationId: listLockerBanks
+      tags:
+        - Locker Banks
+      summary: List locker banks
+      description: Returns all locker banks with optional filtering by site and availability.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: siteId
+          in: query
+          required: false
+          schema:
+            type: string
+            example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+        - name: hasAvailability
+          in: query
+          required: false
+          description: Filter to banks with at least one available compartment
+          schema:
+            type: boolean
+            default: false
+        - name: compartmentSize
+          in: query
+          required: false
+          description: Filter by available compartment size
+          schema:
+            $ref: "#/components/schemas/CompartmentSize"
+        - name: latitude
+          in: query
+          required: false
+          schema:
+            type: number
+            format: double
+        - name: longitude
+          in: query
+          required: false
+          schema:
+            type: number
+            format: double
+        - name: radiusKm
+          in: query
+          required: false
+          description: Search radius in kilometers (requires lat/lng)
+          schema:
+            type: number
+            format: float
+            default: 5
+      responses:
+        "200":
+          description: Locker banks retrieved
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LockerBank"
+                  pagination:
+                    $ref: "#/components/schemas/CursorPagination"
+              example:
+                data:
+                  - id: "lbnk_01HX7B3ABCDEFGHJKMNPQRST"
+                    name: "Ikeja City Mall Lockers"
+                    siteId: "site_01HX7B3ABCDEFGHJKMNPQRST"
+                    status: "ACTIVE"
+                    location:
+                      address: "Obafemi Awolowo Way, Ikeja, Lagos"
+                      latitude: 6.6018
+                      longitude: 3.3515
+                      floor: "Ground Floor"
+                      zone: "Main Entrance"
+                    totalCompartments: 48
+                    availableCompartments: 22
+                    compartmentSummary:
+                      SMALL:
+                        total: 20
+                        available: 10
+                      MEDIUM:
+                        total: 15
+                        available: 7
+                      LARGE:
+                        total: 8
+                        available: 3
+                      XL:
+                        total: 3
+                        available: 1
+                      REFRIGERATED:
+                        total: 2
+                        available: 1
+                    operatingHours:
+                      open: "06:00"
+                      close: "23:00"
+                      timezone: "Africa/Lagos"
+                    createdAt: "2025-06-01T00:00:00Z"
+                pagination:
+                  cursor: null
+                  hasMore: false
+                  limit: 20
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/lockers/banks/{id}:
+    get:
+      operationId: getLockerBank
+      tags:
+        - Locker Banks
+      summary: Get locker bank detail
+      description: Returns full detail of a locker bank including all compartments and their status.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^lbnk_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "lbnk_01HX7B3ABCDEFGHJKMNPQRST"
+      responses:
+        "200":
+          description: Locker bank detail retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LockerBank"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/lockers/banks/{id}/availability:
+    get:
+      operationId: getLockerBankAvailability
+      tags:
+        - Locker Banks
+      summary: Get locker bank availability
+      description: Returns real-time compartment availability grouped by size.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^lbnk_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "lbnk_01HX7B3ABCDEFGHJKMNPQRST"
+        - name: size
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/CompartmentSize"
+      responses:
+        "200":
+          description: Availability retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lockerBankId:
+                    type: string
+                  availability:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        size:
+                          $ref: "#/components/schemas/CompartmentSize"
+                        total:
+                          type: integer
+                        available:
+                          type: integer
+                        reserved:
+                          type: integer
+                        occupied:
+                          type: integer
+                        outOfService:
+                          type: integer
+                  asOf:
+                    type: string
+                    format: date-time
+              example:
+                lockerBankId: "lbnk_01HX7B3ABCDEFGHJKMNPQRST"
+                availability:
+                  - size: "SMALL"
+                    total: 20
+                    available: 10
+                    reserved: 3
+                    occupied: 6
+                    outOfService: 1
+                  - size: "MEDIUM"
+                    total: 15
+                    available: 7
+                    reserved: 2
+                    occupied: 5
+                    outOfService: 1
+                  - size: "LARGE"
+                    total: 8
+                    available: 3
+                    reserved: 1
+                    occupied: 4
+                    outOfService: 0
+                  - size: "XL"
+                    total: 3
+                    available: 1
+                    reserved: 0
+                    occupied: 2
+                    outOfService: 0
+                  - size: "REFRIGERATED"
+                    total: 2
+                    available: 1
+                    reserved: 0
+                    occupied: 1
+                    outOfService: 0
+                asOf: "2025-11-15T10:30:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/lockers/reservations:
+    post:
+      operationId: createReservation
+      tags:
+        - Reservations
+      summary: Create reservation
+      description: |
+        Reserves a locker compartment. The system selects the best available
+        compartment matching the requested size. Reservations expire if not
+        used within the configured timeout.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - lockerBankId
+                - compartmentSize
+                - senderCustomerId
+              properties:
+                lockerBankId:
+                  type: string
+                  example: "lbnk_01HX7B3ABCDEFGHJKMNPQRST"
+                compartmentSize:
+                  $ref: "#/components/schemas/CompartmentSize"
+                senderCustomerId:
+                  type: string
+                  example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                recipientCustomerId:
+                  type: string
+                  nullable: true
+                  description: Recipient customer ID (null for self-pickup)
+                  example: "cust_01HX7B3ABCDEFGHJKMNPQRSU"
+                recipientPhone:
+                  type: string
+                  description: Phone number for access code delivery
+                  example: "+2348098765432"
+                recipientEmail:
+                  type: string
+                  format: email
+                  description: Email for access code delivery
+                  example: "ngozi.okeke@gmail.com"
+                orderId:
+                  type: string
+                  nullable: true
+                  description: Associated order ID
+                  example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                expiresInHours:
+                  type: integer
+                  minimum: 1
+                  maximum: 168
+                  default: 48
+                  description: Hours until the reservation expires
+                  example: 48
+                notes:
+                  type: string
+                  maxLength: 500
+                  example: "Handle with care - fragile electronics"
+            example:
+              lockerBankId: "lbnk_01HX7B3ABCDEFGHJKMNPQRST"
+              compartmentSize: "MEDIUM"
+              senderCustomerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+              recipientCustomerId: "cust_01HX7B3ABCDEFGHJKMNPQRSU"
+              recipientPhone: "+2348098765432"
+              expiresInHours: 48
+              notes: "Handle with care - fragile electronics"
+      responses:
+        "201":
+          description: Reservation created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LockerReservation"
+              example:
+                id: "lrsv_01HX7B3GHJKMNPQRSTUVWXYZ"
+                lockerBankId: "lbnk_01HX7B3ABCDEFGHJKMNPQRST"
+                compartment:
+                  id: "comp_01HX7B3DEFGHJKMNPQRSTUVW"
+                  number: "B12"
+                  size: "MEDIUM"
+                  row: "B"
+                  column: 12
+                senderCustomerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                recipientCustomerId: "cust_01HX7B3ABCDEFGHJKMNPQRSU"
+                recipientPhone: "+2348098765432"
+                status: "RESERVED"
+                orderId: null
+                notes: "Handle with care - fragile electronics"
+                expiresAt: "2025-11-17T10:30:00Z"
+                createdAt: "2025-11-15T10:30:00Z"
+                updatedAt: "2025-11-15T10:30:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: No compartments available of requested size
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/no-compartments-available"
+                title: "No Compartments Available"
+                status: 409
+                detail: "No MEDIUM compartments are currently available at this locker bank."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/lockers/reservations/{id}:
+    get:
+      operationId: getReservation
+      tags:
+        - Reservations
+      summary: Get reservation detail
+      description: Returns full reservation details including compartment assignment and status timeline.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^lrsv_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "lrsv_01HX7B3GHJKMNPQRSTUVWXYZ"
+      responses:
+        "200":
+          description: Reservation retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LockerReservation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/lockers/reservations/{id}/deposit:
+    post:
+      operationId: recordDeposit
+      tags:
+        - Reservations
+      summary: Record deposit
+      description: |
+        Records that an item has been deposited into the reserved compartment.
+        Transitions the reservation to LOADED status and sends a notification
+        to the recipient with the access code.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^lrsv_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "lrsv_01HX7B3GHJKMNPQRSTUVWXYZ"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                photoUrl:
+                  type: string
+                  format: uri
+                  description: Photo of deposited item for verification
+                weightGrams:
+                  type: integer
+                  description: Weight of deposited item in grams
+                  example: 750
+                description:
+                  type: string
+                  example: "Samsung Galaxy A25 phone in original box"
+      responses:
+        "200":
+          description: Deposit recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LockerReservation"
+              example:
+                id: "lrsv_01HX7B3GHJKMNPQRSTUVWXYZ"
+                lockerBankId: "lbnk_01HX7B3ABCDEFGHJKMNPQRST"
+                compartment:
+                  id: "comp_01HX7B3DEFGHJKMNPQRSTUVW"
+                  number: "B12"
+                  size: "MEDIUM"
+                status: "LOADED"
+                depositedAt: "2025-11-15T11:00:00Z"
+                accessCodeSentAt: "2025-11-15T11:00:05Z"
+                updatedAt: "2025-11-15T11:00:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Reservation not in RESERVED status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/lockers/reservations/{id}/pickup:
+    post:
+      operationId: initiatePickup
+      tags:
+        - Reservations
+      summary: Initiate pickup
+      description: |
+        Initiates the pickup workflow. Verifies the requester's identity and
+        sends a command to open the compartment door. Transitions to PICKED_UP
+        once the door is opened and closed.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^lrsv_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "lrsv_01HX7B3GHJKMNPQRSTUVWXYZ"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - accessCode
+              properties:
+                accessCode:
+                  type: string
+                  pattern: '^\d{6}$'
+                  description: 6-digit access code
+                  example: "847291"
+                customerId:
+                  type: string
+                  description: Customer ID of the person picking up
+                  example: "cust_01HX7B3ABCDEFGHJKMNPQRSU"
+            example:
+              accessCode: "847291"
+              customerId: "cust_01HX7B3ABCDEFGHJKMNPQRSU"
+      responses:
+        "200":
+          description: Compartment opened for pickup
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reservation:
+                    $ref: "#/components/schemas/LockerReservation"
+                  compartmentAction:
+                    type: object
+                    properties:
+                      action:
+                        type: string
+                        example: "DOOR_OPENED"
+                      compartmentNumber:
+                        type: string
+                        example: "B12"
+                      autoLockSeconds:
+                        type: integer
+                        description: Seconds until compartment auto-locks
+                        example: 60
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Invalid access code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/invalid-access-code"
+                title: "Invalid Access Code"
+                status: 403
+                detail: "The access code is incorrect. 2 attempts remaining."
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Reservation not in LOADED or READY_FOR_PICKUP status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/lockers/reservations/{id}/cancel:
+    post:
+      operationId: cancelReservation
+      tags:
+        - Reservations
+      summary: Cancel reservation
+      description: |
+        Cancels a reservation and releases the compartment. Only RESERVED
+        reservations can be cancelled. LOADED reservations require operator intervention.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^lrsv_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "lrsv_01HX7B3GHJKMNPQRSTUVWXYZ"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reason
+              properties:
+                reason:
+                  type: string
+                  maxLength: 500
+                  example: "Customer no longer needs locker"
+            example:
+              reason: "Customer no longer needs locker"
+      responses:
+        "200":
+          description: Reservation cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LockerReservation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Reservation cannot be cancelled in current status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/reservation-not-cancellable"
+                title: "Reservation Not Cancellable"
+                status: 409
+                detail: "LOADED reservations cannot be cancelled. Please contact an operator."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/lockers/reservations/{id}/access-code:
+    get:
+      operationId: getAccessCode
+      tags:
+        - Access
+      summary: Get access code
+      description: |
+        Returns the current access code for a reservation. Only accessible
+        by the sender or recipient. A new code can be generated if the previous
+        one has expired.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^lrsv_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "lrsv_01HX7B3GHJKMNPQRSTUVWXYZ"
+        - name: regenerate
+          in: query
+          required: false
+          description: Generate a new access code (invalidates previous)
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Access code retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reservationId:
+                    type: string
+                    example: "lrsv_01HX7B3GHJKMNPQRSTUVWXYZ"
+                  accessCode:
+                    type: string
+                    example: "847291"
+                  expiresAt:
+                    type: string
+                    format: date-time
+                    example: "2025-11-17T10:30:00Z"
+                  attemptsRemaining:
+                    type: integer
+                    description: Remaining incorrect attempts before lockout
+                    example: 3
+                  compartmentNumber:
+                    type: string
+                    example: "B12"
+                  lockerBankName:
+                    type: string
+                    example: "Ikeja City Mall Lockers"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/lockers/reservations/{id}/verify-access:
+    post:
+      operationId: verifyAccess
+      tags:
+        - Access
+      summary: Verify access code
+      description: |
+        Verifies an access code without initiating a pickup. Used by the
+        locker device to validate codes locally before opening the compartment.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^lrsv_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "lrsv_01HX7B3GHJKMNPQRSTUVWXYZ"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - accessCode
+              properties:
+                accessCode:
+                  type: string
+                  pattern: '^\d{6}$'
+                  example: "847291"
+                deviceId:
+                  type: string
+                  description: Device ID of the locker terminal
+                  example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+            example:
+              accessCode: "847291"
+              deviceId: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+      responses:
+        "200":
+          description: Access code verified
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                    example: true
+                  compartmentNumber:
+                    type: string
+                    example: "B12"
+                  action:
+                    type: string
+                    enum: [OPEN_DOOR, DENY]
+                    example: "OPEN_DOOR"
+                  reservationStatus:
+                    type: string
+                    example: "LOADED"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    TenantId:
+      name: X-Tenant-ID
+      in: header
+      required: true
+      schema:
+        type: string
+        example: "tnt_01HX7B3ABCDEFGHJKMNPQRST"
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  headers:
+    X-RateLimit-Limit:
+      schema:
+        type: integer
+        example: 100
+    X-RateLimit-Remaining:
+      schema:
+        type: integer
+        example: 95
+    X-RateLimit-Reset:
+      schema:
+        type: integer
+        format: int64
+
+  schemas:
+    LockerBank:
+      type: object
+      required:
+        - id
+        - name
+        - siteId
+        - status
+        - totalCompartments
+        - createdAt
+      properties:
+        id:
+          type: string
+          pattern: '^lbnk_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "lbnk_01HX7B3ABCDEFGHJKMNPQRST"
+        name:
+          type: string
+          example: "Ikeja City Mall Lockers"
+        siteId:
+          type: string
+          example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+        status:
+          type: string
+          enum: [ACTIVE, MAINTENANCE, OFFLINE, DECOMMISSIONED]
+          example: "ACTIVE"
+        location:
+          type: object
+          properties:
+            address:
+              type: string
+              example: "Obafemi Awolowo Way, Ikeja, Lagos"
+            latitude:
+              type: number
+              format: double
+              example: 6.6018
+            longitude:
+              type: number
+              format: double
+              example: 3.3515
+            floor:
+              type: string
+              example: "Ground Floor"
+            zone:
+              type: string
+              example: "Main Entrance"
+        totalCompartments:
+          type: integer
+          example: 48
+        availableCompartments:
+          type: integer
+          example: 22
+        compartmentSummary:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              total:
+                type: integer
+              available:
+                type: integer
+        compartments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Compartment"
+        operatingHours:
+          type: object
+          properties:
+            open:
+              type: string
+              example: "06:00"
+            close:
+              type: string
+              example: "23:00"
+            timezone:
+              type: string
+              example: "Africa/Lagos"
+        deviceId:
+          type: string
+          description: Associated device for commands
+          example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Compartment:
+      type: object
+      required:
+        - id
+        - number
+        - size
+        - status
+      properties:
+        id:
+          type: string
+          pattern: '^comp_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "comp_01HX7B3DEFGHJKMNPQRSTUVW"
+        number:
+          type: string
+          description: Human-readable compartment number (e.g., A1, B12)
+          example: "B12"
+        size:
+          $ref: "#/components/schemas/CompartmentSize"
+        status:
+          type: string
+          enum: [AVAILABLE, RESERVED, OCCUPIED, OUT_OF_SERVICE]
+          example: "AVAILABLE"
+        row:
+          type: string
+          example: "B"
+        column:
+          type: integer
+          example: 12
+        dimensions:
+          type: object
+          properties:
+            widthCm:
+              type: integer
+            heightCm:
+              type: integer
+            depthCm:
+              type: integer
+        temperature:
+          type: number
+          format: float
+          nullable: true
+          description: Current temperature in Celsius (for REFRIGERATED compartments)
+          example: null
+        currentReservationId:
+          type: string
+          nullable: true
+
+    CompartmentSize:
+      type: string
+      enum:
+        - SMALL
+        - MEDIUM
+        - LARGE
+        - XL
+        - REFRIGERATED
+      description: |
+        Compartment sizes:
+        - SMALL: Documents, small packages (30x20x15 cm)
+        - MEDIUM: Standard packages (40x30x25 cm)
+        - LARGE: Large packages (50x40x35 cm)
+        - XL: Extra-large items (60x50x45 cm)
+        - REFRIGERATED: Temperature-controlled (40x30x25 cm, 2-8 deg C)
+      example: "MEDIUM"
+
+    LockerReservation:
+      type: object
+      required:
+        - id
+        - lockerBankId
+        - compartment
+        - senderCustomerId
+        - status
+        - expiresAt
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          pattern: '^lrsv_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "lrsv_01HX7B3GHJKMNPQRSTUVWXYZ"
+        lockerBankId:
+          type: string
+          example: "lbnk_01HX7B3ABCDEFGHJKMNPQRST"
+        compartment:
+          type: object
+          properties:
+            id:
+              type: string
+              example: "comp_01HX7B3DEFGHJKMNPQRSTUVW"
+            number:
+              type: string
+              example: "B12"
+            size:
+              $ref: "#/components/schemas/CompartmentSize"
+            row:
+              type: string
+            column:
+              type: integer
+        senderCustomerId:
+          type: string
+          example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+        recipientCustomerId:
+          type: string
+          nullable: true
+          example: "cust_01HX7B3ABCDEFGHJKMNPQRSU"
+        recipientPhone:
+          type: string
+          example: "+2348098765432"
+        recipientEmail:
+          type: string
+          format: email
+          nullable: true
+        status:
+          $ref: "#/components/schemas/ReservationStatus"
+        orderId:
+          type: string
+          nullable: true
+        notes:
+          type: string
+          nullable: true
+        depositedAt:
+          type: string
+          format: date-time
+          nullable: true
+        pickedUpAt:
+          type: string
+          format: date-time
+          nullable: true
+        accessCodeSentAt:
+          type: string
+          format: date-time
+          nullable: true
+        cancellationReason:
+          type: string
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+          example: "2025-11-17T10:30:00Z"
+        statusHistory:
+          type: array
+          items:
+            type: object
+            properties:
+              status:
+                $ref: "#/components/schemas/ReservationStatus"
+              timestamp:
+                type: string
+                format: date-time
+              actor:
+                type: string
+                description: User or system that triggered the transition
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    ReservationStatus:
+      type: string
+      enum:
+        - RESERVED
+        - LOADED
+        - READY_FOR_PICKUP
+        - PICKED_UP
+        - EXPIRED
+        - CANCELLED
+      description: |
+        Reservation lifecycle:
+        - RESERVED: Compartment reserved, awaiting deposit
+        - LOADED: Item deposited in compartment
+        - READY_FOR_PICKUP: Access code sent, ready for pickup
+        - PICKED_UP: Item picked up by recipient
+        - EXPIRED: Reservation expired without pickup
+        - CANCELLED: Reservation cancelled
+      example: "RESERVED"
+
+    Money:
+      type: object
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          type: integer
+          description: Amount in minor currency units (kobo for NGN)
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          example: "NGN"
+
+    CursorPagination:
+      type: object
+      properties:
+        cursor:
+          type: string
+          nullable: true
+        hasMore:
+          type: boolean
+        limit:
+          type: integer
+
+    ProblemDetail:
+      type: object
+      description: RFC 7807 Problem Details
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+              code:
+                type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/validation-error"
+            title: "Validation Error"
+            status: 400
+            detail: "The request body contains invalid fields."
+
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/unauthorized"
+            title: "Unauthorized"
+            status: 401
+
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/forbidden"
+            title: "Forbidden"
+            status: 403
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/not-found"
+            title: "Not Found"
+            status: 404
+
+    InternalServerError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/internal-error"
+            title: "Internal Server Error"
+            status: 500
+
+security:
+  - BearerAuth: []

@@ -1,0 +1,187 @@
+# IVM Platform - API Specification Index
+#
+# This file serves as the master index for all IVM Platform OpenAPI specifications.
+# Each service has its own standalone OpenAPI 3.0.3 YAML specification file.
+#
+# Usage:
+#   - Each spec can be loaded independently in tools like Swagger UI, Redocly, or Stoplight
+#   - For a unified view, use a tool that supports multi-file OpenAPI specs
+#   - All specs share common patterns documented below
+#
+# Common Patterns:
+#   - OpenAPI version: 3.0.3
+#   - Base URL: https://api.ivm.ng
+#   - Authentication: Bearer JWT (all services), mTLS (device service)
+#   - ID format: Prefixed ULIDs (e.g., usr_01HX7B3ABC..., ord_01HX7B3DEF...)
+#   - Error format: RFC 7807 Problem Details
+#   - Pagination: Cursor-based (cursor + limit query params)
+#   - Money: { amount: integer (minor units), currency: string (ISO 4217) }
+#   - Timestamps: ISO 8601 UTC (e.g., 2025-11-15T10:30:00Z)
+#   - Multi-tenancy: X-Tenant-ID header (required)
+#   - Request tracing: X-Request-ID header (optional)
+#   - Rate limiting: X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset headers
+
+apis:
+  # ──────────────────────────────────────────────────────────────────────
+  # Core Platform Services
+  # ──────────────────────────────────────────────────────────────────────
+
+  - name: Identity & Authentication Service
+    spec: openapi-identity.yaml
+    description: |
+      User registration, multi-factor authentication (password + OTP),
+      JWT token lifecycle, and device identity management with mTLS
+      certificate exchange.
+    basePath: /api/v1/auth
+    port: 8080
+    idPrefixes:
+      - usr_ (users)
+      - dev_ (device identities)
+      - rol_ (roles)
+      - perm_ (permissions)
+    endpoints: 8
+
+  - name: Customer & KYC Service
+    spec: openapi-customer-kyc.yaml
+    description: |
+      Customer profile management and Know Your Customer verification
+      through BVN, NIN, document upload, and biometric capture. Implements
+      tiered KYC system (TIER_0 through TIER_3) with transaction limits.
+    basePath: /api/v1/customers
+    port: 8081
+    idPrefixes:
+      - cust_ (customers)
+      - kyc_ (KYC evidence)
+    endpoints: 10
+
+  - name: Catalog & Pricing Service
+    spec: openapi-catalog.yaml
+    description: |
+      Product and service catalog management including items, categories,
+      pricing rules, and promotions across all channel types.
+    basePath: /api/v1/catalog
+    port: 8082
+    idPrefixes:
+      - itm_ (catalog items)
+      - cat_ (categories)
+      - promo_ (promotions)
+    endpoints: 10
+
+  - name: Order Service
+    spec: openapi-order.yaml
+    description: |
+      Full order lifecycle management from creation through fulfillment,
+      including payment orchestration, dispute resolution, and multi-channel
+      order tracking.
+    basePath: /api/v1/orders
+    port: 8083
+    idPrefixes:
+      - ord_ (orders)
+      - li_ (line items)
+      - ful_ (fulfillment tasks)
+    endpoints: 8
+
+  - name: Payment Service
+    spec: openapi-payment.yaml
+    description: |
+      Payment processing with full lifecycle support: initiation, authorization,
+      capture, void, and refund. Supports card, mobile money, bank transfer,
+      wallet, USSD, and QR payment methods.
+    basePath: /api/v1/payments
+    port: 8084
+    idPrefixes:
+      - pay_ (payments)
+      - pm_ (payment methods)
+      - stl_ (settlements)
+      - ref_ (refunds)
+    endpoints: 12
+
+  - name: Device Management Service
+    spec: openapi-device.yaml
+    description: |
+      Device fleet management including registration, configuration, command
+      dispatch, health monitoring, telemetry collection, and OTA firmware updates.
+    basePath: /api/v1/devices
+    port: 8085
+    idPrefixes:
+      - dev_ (devices)
+      - cmd_ (commands)
+    endpoints: 11
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Channel Modules
+  # ──────────────────────────────────────────────────────────────────────
+
+  - name: Locker Module
+    spec: openapi-locker.yaml
+    description: |
+      Smart locker management including locker bank discovery, compartment
+      reservations, deposit/pickup workflows, and access code verification.
+    basePath: /api/v1/lockers
+    port: 8086
+    idPrefixes:
+      - lbnk_ (locker banks)
+      - comp_ (compartments)
+      - lrsv_ (reservations)
+    endpoints: 10
+
+  - name: Autonomous Store Module
+    spec: openapi-store.yaml
+    description: |
+      "Just walk out" autonomous store management including session tracking,
+      computer-vision basket detection, sensor fusion reconciliation,
+      automatic charging, and dispute handling.
+    basePath: /api/v1/store
+    port: 8087
+    idPrefixes:
+      - ssn_ (shopping sessions)
+      - evt_ (sensor events)
+    endpoints: 10
+
+# ──────────────────────────────────────────────────────────────────────
+# Summary
+# ──────────────────────────────────────────────────────────────────────
+#
+# Total Services:    8
+# Total Endpoints:  79
+#
+# Channel Types:    KIOSK, LOCKER, STORE, MOBILE, WEB
+#
+# ID Prefix Registry:
+#   usr_    User
+#   dev_    Device / Device Identity
+#   rol_    Role
+#   perm_   Permission
+#   cust_   Customer
+#   kyc_    KYC Evidence
+#   itm_    Catalog Item
+#   cat_    Category
+#   promo_  Promotion
+#   ord_    Order
+#   li_     Order Line Item
+#   ful_    Fulfillment Task
+#   pay_    Payment
+#   pm_     Payment Method
+#   stl_    Settlement
+#   ref_    Refund
+#   cmd_    Device Command
+#   lbnk_   Locker Bank
+#   comp_   Compartment
+#   lrsv_   Locker Reservation
+#   ssn_    Shopping Session
+#   evt_    Sensor Event
+#   disp_   Dispute
+#   otp_    OTP Request
+#   tnt_    Tenant
+#   site_   Site
+#
+# KYC Tiers:
+#   TIER_0  Basic registration            NGN    50,000/day
+#   TIER_1  BVN or NIN verified           NGN   200,000/day
+#   TIER_2  Gov ID + address              NGN 1,000,000/day
+#   TIER_3  Full biometric + EDD          NGN 5,000,000/day
+#
+# Environment URLs:
+#   Production:  https://api.ivm.ng
+#   Staging:     https://api.staging.ivm.ng
+#   Local:       http://localhost:{port}

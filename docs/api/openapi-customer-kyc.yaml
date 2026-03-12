@@ -1,0 +1,1357 @@
+openapi: "3.0.3"
+info:
+  title: IVM Platform - Customer & KYC Service
+  description: |
+    Customer profile management and Know Your Customer (KYC) verification service.
+    Handles customer identity verification through BVN, NIN, document upload, and
+    biometric capture. Implements a tiered KYC system (TIER_0 through TIER_3) that
+    determines transaction limits and available services.
+
+    ## KYC Tiers
+    - **TIER_0**: Basic registration, minimal verification. Daily limit: NGN 50,000
+    - **TIER_1**: BVN or NIN verified. Daily limit: NGN 200,000
+    - **TIER_2**: Government ID + address verification. Daily limit: NGN 1,000,000
+    - **TIER_3**: Full biometric + enhanced due diligence. Daily limit: NGN 5,000,000
+
+    ## ID Format
+    All entity IDs use prefixed ULIDs:
+    - Customers: `cust_01HX7B3ABC...`
+    - KYC evidence: `kyc_01HX7B3DEF...`
+  version: "1.0.0"
+  contact:
+    name: IVM Platform Engineering
+    email: platform@ivm.ng
+  license:
+    name: Proprietary
+    url: https://ivm.ng/terms
+
+servers:
+  - url: https://api.ivm.ng
+    description: Production
+  - url: https://api.staging.ivm.ng
+    description: Staging
+  - url: http://localhost:8081
+    description: Local development
+
+tags:
+  - name: Customer
+    description: Customer profile management
+  - name: KYC
+    description: Know Your Customer verification
+  - name: History
+    description: Customer order and payment history
+
+paths:
+  /api/v1/customers/{id}:
+    get:
+      operationId: getCustomer
+      tags:
+        - Customer
+      summary: Get customer profile
+      description: Retrieves the full customer profile including KYC tier and contact details.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          description: Customer prefixed ULID
+          schema:
+            type: string
+            pattern: '^cust_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+      responses:
+        "200":
+          description: Customer profile retrieved
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+              example:
+                id: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                userId: "usr_01HX7B3ABCDEFGHJKMNPQRST"
+                firstName: "Chidinma"
+                lastName: "Eze"
+                email: "chidinma.eze@yahoo.com"
+                phone: "+2348098765432"
+                dateOfBirth: "1992-03-15"
+                gender: "FEMALE"
+                address:
+                  street: "15 Adeola Odeku Street"
+                  city: "Victoria Island"
+                  state: "Lagos"
+                  country: "NG"
+                  postalCode: "101241"
+                kycTier: "TIER_1"
+                kycStatus: "VERIFIED"
+                dailyTransactionLimit:
+                  amount: 20000000
+                  currency: "NGN"
+                createdAt: "2025-06-20T08:15:00Z"
+                updatedAt: "2025-11-10T14:22:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    patch:
+      operationId: updateCustomer
+      tags:
+        - Customer
+      summary: Update customer profile
+      description: |
+        Partially updates the customer profile. Only the fields provided in the
+        request body are updated. Some fields (like KYC tier) cannot be updated
+        directly and must go through verification endpoints.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^cust_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                firstName:
+                  type: string
+                  example: "Chidinma"
+                lastName:
+                  type: string
+                  example: "Eze"
+                email:
+                  type: string
+                  format: email
+                  example: "chidinma.eze@yahoo.com"
+                phone:
+                  type: string
+                  pattern: '^\+234\d{10}$'
+                  example: "+2348098765432"
+                dateOfBirth:
+                  type: string
+                  format: date
+                  example: "1992-03-15"
+                gender:
+                  type: string
+                  enum: [MALE, FEMALE, OTHER, PREFER_NOT_TO_SAY]
+                address:
+                  $ref: "#/components/schemas/Address"
+            example:
+              address:
+                street: "25 Marina Road"
+                city: "Lagos Island"
+                state: "Lagos"
+                country: "NG"
+                postalCode: "101001"
+      responses:
+        "200":
+          description: Customer profile updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Customer"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/customers/{id}/kyc:
+    get:
+      operationId: getKycStatus
+      tags:
+        - KYC
+      summary: Get KYC status
+      description: |
+        Returns the current KYC verification status including tier, evidence submitted,
+        and any pending verifications.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^cust_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+      responses:
+        "200":
+          description: KYC status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KycStatus"
+              example:
+                customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                currentTier: "TIER_1"
+                status: "VERIFIED"
+                evidence:
+                  - id: "kyc_01HX7B3ABCDEFGHJKMNPQRSU"
+                    type: "BVN"
+                    status: "VERIFIED"
+                    verifiedAt: "2025-08-12T09:30:00Z"
+                    expiresAt: "2026-08-12T09:30:00Z"
+                pendingRequirements:
+                  - type: "NIN"
+                    description: "National Identification Number verification required for TIER_2"
+                  - type: "PROOF_OF_ADDRESS"
+                    description: "Utility bill or bank statement required for TIER_2"
+                tierHistory:
+                  - tier: "TIER_0"
+                    achievedAt: "2025-06-20T08:15:00Z"
+                  - tier: "TIER_1"
+                    achievedAt: "2025-08-12T09:30:00Z"
+                updatedAt: "2025-08-12T09:30:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/customers/{id}/kyc/verify-bvn:
+    post:
+      operationId: verifyBvn
+      tags:
+        - KYC
+      summary: BVN verification
+      description: |
+        Initiates Bank Verification Number (BVN) verification via NIBSS.
+        The BVN is validated against the customer's name and date of birth.
+        Successful verification contributes to TIER_1 status.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^cust_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - bvn
+                - dateOfBirth
+              properties:
+                bvn:
+                  type: string
+                  pattern: '^\d{11}$'
+                  description: 11-digit Bank Verification Number
+                  example: "22312345678"
+                dateOfBirth:
+                  type: string
+                  format: date
+                  example: "1992-03-15"
+                consent:
+                  type: boolean
+                  description: Customer consent for BVN lookup
+                  example: true
+            example:
+              bvn: "22312345678"
+              dateOfBirth: "1992-03-15"
+              consent: true
+      responses:
+        "200":
+          description: BVN verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  evidence:
+                    $ref: "#/components/schemas/IdentityEvidence"
+                  kycTierUpdate:
+                    type: object
+                    properties:
+                      previousTier:
+                        $ref: "#/components/schemas/KycTier"
+                      currentTier:
+                        $ref: "#/components/schemas/KycTier"
+              example:
+                evidence:
+                  id: "kyc_01HX7B3ABCDEFGHJKMNPQRSU"
+                  customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                  type: "BVN"
+                  status: "VERIFIED"
+                  provider: "NIBSS"
+                  verifiedAt: "2025-11-15T10:30:00Z"
+                  expiresAt: "2026-11-15T10:30:00Z"
+                  metadata:
+                    matchScore: 0.98
+                    fieldsMatched: ["firstName", "lastName", "dateOfBirth"]
+                kycTierUpdate:
+                  previousTier: "TIER_0"
+                  currentTier: "TIER_1"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: BVN verification failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/bvn-verification-failed"
+                title: "BVN Verification Failed"
+                status: 422
+                detail: "The BVN could not be verified. Name mismatch detected."
+                instance: "/api/v1/customers/cust_01HX7B3ABCDEFGHJKMNPQRST/kyc/verify-bvn"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/customers/{id}/kyc/verify-nin:
+    post:
+      operationId: verifyNin
+      tags:
+        - KYC
+      summary: NIN verification
+      description: |
+        Initiates National Identification Number (NIN) verification via NIMC.
+        The NIN is validated against the customer's biometric and demographic data.
+        Successful verification contributes to TIER_2 status.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^cust_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - nin
+              properties:
+                nin:
+                  type: string
+                  pattern: '^\d{11}$'
+                  description: 11-digit National Identification Number
+                  example: "70123456789"
+                consent:
+                  type: boolean
+                  description: Customer consent for NIN lookup
+                  example: true
+            example:
+              nin: "70123456789"
+              consent: true
+      responses:
+        "200":
+          description: NIN verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  evidence:
+                    $ref: "#/components/schemas/IdentityEvidence"
+                  kycTierUpdate:
+                    type: object
+                    properties:
+                      previousTier:
+                        $ref: "#/components/schemas/KycTier"
+                      currentTier:
+                        $ref: "#/components/schemas/KycTier"
+              example:
+                evidence:
+                  id: "kyc_01HX7B3ABCDEFGHJKMNPQRSV"
+                  customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                  type: "NIN"
+                  status: "VERIFIED"
+                  provider: "NIMC"
+                  verifiedAt: "2025-11-15T11:00:00Z"
+                  expiresAt: "2026-11-15T11:00:00Z"
+                  metadata:
+                    matchScore: 0.97
+                    fieldsMatched: ["firstName", "lastName", "dateOfBirth", "gender"]
+                kycTierUpdate:
+                  previousTier: "TIER_1"
+                  currentTier: "TIER_2"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: NIN verification failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/nin-verification-failed"
+                title: "NIN Verification Failed"
+                status: 422
+                detail: "The NIN could not be verified. Data mismatch detected."
+                instance: "/api/v1/customers/cust_01HX7B3ABCDEFGHJKMNPQRST/kyc/verify-nin"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/customers/{id}/kyc/verify-doc:
+    post:
+      operationId: verifyDocument
+      tags:
+        - KYC
+      summary: Document verification
+      description: |
+        Uploads and verifies an identity document (e.g., International Passport,
+        Driver's License, Voter's Card, or utility bill for proof of address).
+        Documents are validated using OCR and fraud detection.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^cust_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - documentType
+                - documentFront
+              properties:
+                documentType:
+                  type: string
+                  enum:
+                    - INTERNATIONAL_PASSPORT
+                    - DRIVERS_LICENSE
+                    - VOTERS_CARD
+                    - NATIONAL_ID
+                    - UTILITY_BILL
+                    - BANK_STATEMENT
+                  example: "INTERNATIONAL_PASSPORT"
+                documentFront:
+                  type: string
+                  format: binary
+                  description: Front image of the document (JPEG/PNG, max 5MB)
+                documentBack:
+                  type: string
+                  format: binary
+                  description: Back image of the document (optional for some types)
+                documentNumber:
+                  type: string
+                  example: "A12345678"
+                issuingCountry:
+                  type: string
+                  default: "NG"
+                  example: "NG"
+                expiryDate:
+                  type: string
+                  format: date
+                  example: "2028-06-30"
+      responses:
+        "202":
+          description: Document submitted for verification (async processing)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  evidence:
+                    $ref: "#/components/schemas/IdentityEvidence"
+                  estimatedCompletionTime:
+                    type: string
+                    format: date-time
+                    description: Estimated completion time for verification
+              example:
+                evidence:
+                  id: "kyc_01HX7B3ABCDEFGHJKMNPQRSW"
+                  customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                  type: "DOCUMENT"
+                  status: "PENDING"
+                  provider: "IVM_INTERNAL"
+                  submittedAt: "2025-11-15T11:30:00Z"
+                  metadata:
+                    documentType: "INTERNATIONAL_PASSPORT"
+                    documentNumber: "A12345678"
+                estimatedCompletionTime: "2025-11-15T12:30:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          description: File too large
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/payload-too-large"
+                title: "Payload Too Large"
+                status: 413
+                detail: "The uploaded file exceeds the maximum size of 5MB."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/customers/{id}/kyc/biometric:
+    post:
+      operationId: captureBiometric
+      tags:
+        - KYC
+      summary: Biometric capture
+      description: |
+        Captures and verifies biometric data (facial recognition or fingerprint).
+        Used for TIER_3 verification and device-based identity confirmation.
+        The biometric template is compared against BVN/NIN registered biometrics.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^cust_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - biometricType
+                - biometricData
+              properties:
+                biometricType:
+                  type: string
+                  enum: [FACE, FINGERPRINT, IRIS]
+                  example: "FACE"
+                biometricData:
+                  type: string
+                  format: binary
+                  description: Biometric capture data (image or template)
+                livenessCheck:
+                  type: boolean
+                  default: true
+                  description: Whether to perform liveness detection
+                captureDeviceId:
+                  type: string
+                  description: ID of the device that captured the biometric
+                  example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+      responses:
+        "200":
+          description: Biometric verification result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  evidence:
+                    $ref: "#/components/schemas/IdentityEvidence"
+                  livenessResult:
+                    type: object
+                    properties:
+                      isLive:
+                        type: boolean
+                        example: true
+                      confidence:
+                        type: number
+                        format: float
+                        minimum: 0
+                        maximum: 1
+                        example: 0.99
+                  kycTierUpdate:
+                    type: object
+                    properties:
+                      previousTier:
+                        $ref: "#/components/schemas/KycTier"
+                      currentTier:
+                        $ref: "#/components/schemas/KycTier"
+              example:
+                evidence:
+                  id: "kyc_01HX7B3ABCDEFGHJKMNPQRSX"
+                  customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                  type: "BIOMETRIC"
+                  status: "VERIFIED"
+                  provider: "IVM_INTERNAL"
+                  verifiedAt: "2025-11-15T12:00:00Z"
+                  metadata:
+                    biometricType: "FACE"
+                    matchScore: 0.96
+                    livenessScore: 0.99
+                livenessResult:
+                  isLive: true
+                  confidence: 0.99
+                kycTierUpdate:
+                  previousTier: "TIER_2"
+                  currentTier: "TIER_3"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Biometric verification failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/biometric-verification-failed"
+                title: "Biometric Verification Failed"
+                status: 422
+                detail: "Liveness check failed. Please ensure proper lighting and face the camera directly."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/customers/{id}/kyc/tier:
+    get:
+      operationId: getKycTier
+      tags:
+        - KYC
+      summary: Get KYC tier
+      description: Returns the customer's current KYC tier and associated transaction limits.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^cust_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+      responses:
+        "200":
+          description: KYC tier information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  customerId:
+                    type: string
+                    example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                  currentTier:
+                    $ref: "#/components/schemas/KycTier"
+                  limits:
+                    type: object
+                    properties:
+                      dailyTransactionLimit:
+                        $ref: "#/components/schemas/Money"
+                      singleTransactionLimit:
+                        $ref: "#/components/schemas/Money"
+                      monthlyTransactionLimit:
+                        $ref: "#/components/schemas/Money"
+                  nextTier:
+                    type: object
+                    nullable: true
+                    properties:
+                      tier:
+                        $ref: "#/components/schemas/KycTier"
+                      requirements:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            type:
+                              type: string
+                            description:
+                              type: string
+                            completed:
+                              type: boolean
+              example:
+                customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                currentTier: "TIER_1"
+                limits:
+                  dailyTransactionLimit:
+                    amount: 20000000
+                    currency: "NGN"
+                  singleTransactionLimit:
+                    amount: 10000000
+                    currency: "NGN"
+                  monthlyTransactionLimit:
+                    amount: 500000000
+                    currency: "NGN"
+                nextTier:
+                  tier: "TIER_2"
+                  requirements:
+                    - type: "NIN"
+                      description: "National Identification Number verification"
+                      completed: false
+                    - type: "PROOF_OF_ADDRESS"
+                      description: "Utility bill or bank statement (not older than 3 months)"
+                      completed: false
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/customers/{id}/orders:
+    get:
+      operationId: getCustomerOrders
+      tags:
+        - History
+      summary: Order history
+      description: Returns paginated order history for the customer using cursor-based pagination.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^cust_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: status
+          in: query
+          required: false
+          description: Filter by order status
+          schema:
+            type: string
+            enum: [DRAFT, PENDING_PAYMENT, PAYMENT_AUTHORIZED, FULFILLING, PARTIALLY_FULFILLED, COMPLETED, CANCELLED, DISPUTED, RESOLVED]
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Start date filter (ISO 8601)
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: End date filter (ISO 8601)
+      responses:
+        "200":
+          description: Order history retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                        status:
+                          type: string
+                          example: "COMPLETED"
+                        totalAmount:
+                          $ref: "#/components/schemas/Money"
+                        channelType:
+                          type: string
+                          example: "KIOSK"
+                        itemCount:
+                          type: integer
+                          example: 3
+                        createdAt:
+                          type: string
+                          format: date-time
+                        completedAt:
+                          type: string
+                          format: date-time
+                  pagination:
+                    $ref: "#/components/schemas/CursorPagination"
+              example:
+                data:
+                  - id: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                    status: "COMPLETED"
+                    totalAmount:
+                      amount: 1250000
+                      currency: "NGN"
+                    channelType: "KIOSK"
+                    itemCount: 3
+                    createdAt: "2025-11-10T14:00:00Z"
+                    completedAt: "2025-11-10T14:05:00Z"
+                  - id: "ord_01HX7B3ABCDEFGHJKMNPQRSU"
+                    status: "COMPLETED"
+                    totalAmount:
+                      amount: 500000
+                      currency: "NGN"
+                    channelType: "LOCKER"
+                    itemCount: 1
+                    createdAt: "2025-11-08T09:30:00Z"
+                    completedAt: "2025-11-08T10:15:00Z"
+                pagination:
+                  cursor: "eyJpZCI6Im9yZF8wMUhYN0IzQUJDREVGR0hKS01OUFFSU1UifQ=="
+                  hasMore: true
+                  limit: 20
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/customers/{id}/payments:
+    get:
+      operationId: getCustomerPayments
+      tags:
+        - History
+      summary: Payment history
+      description: Returns paginated payment history for the customer using cursor-based pagination.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^cust_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [INITIATED, AUTHORIZED, CAPTURED, SETTLED, FAILED, VOIDED, PARTIALLY_REFUNDED, FULLY_REFUNDED]
+        - name: method
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [CARD, MOBILE_MONEY, BANK_TRANSFER, WALLET, USSD, QR]
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Payment history retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                          example: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+                        orderId:
+                          type: string
+                          example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                        amount:
+                          $ref: "#/components/schemas/Money"
+                        method:
+                          type: string
+                          example: "CARD"
+                        status:
+                          type: string
+                          example: "CAPTURED"
+                        createdAt:
+                          type: string
+                          format: date-time
+                  pagination:
+                    $ref: "#/components/schemas/CursorPagination"
+              example:
+                data:
+                  - id: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+                    orderId: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                    amount:
+                      amount: 1250000
+                      currency: "NGN"
+                    method: "CARD"
+                    status: "CAPTURED"
+                    createdAt: "2025-11-10T14:01:00Z"
+                pagination:
+                  cursor: "eyJpZCI6InBheV8wMUhYN0IzQUJDREVGR0hKS01OUFFSU1QifQ=="
+                  hasMore: false
+                  limit: 20
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token from the Identity service
+
+  parameters:
+    TenantId:
+      name: X-Tenant-ID
+      in: header
+      required: true
+      description: Tenant identifier for multi-tenant context
+      schema:
+        type: string
+        example: "tnt_01HX7B3ABCDEFGHJKMNPQRST"
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: Unique request identifier for tracing
+      schema:
+        type: string
+        format: uuid
+        example: "550e8400-e29b-41d4-a716-446655440000"
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque cursor for pagination (from previous response)
+      schema:
+        type: string
+        example: "eyJpZCI6Im9yZF8wMUhYN0IzQUJDREVGR0hKS01OUFFSU1QifQ=="
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of items to return
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+        example: 20
+
+  headers:
+    X-RateLimit-Limit:
+      description: Maximum number of requests allowed in the current window
+      schema:
+        type: integer
+        example: 100
+    X-RateLimit-Remaining:
+      description: Number of requests remaining in the current window
+      schema:
+        type: integer
+        example: 95
+    X-RateLimit-Reset:
+      description: Unix timestamp when the rate limit window resets
+      schema:
+        type: integer
+        format: int64
+        example: 1700045400
+
+  schemas:
+    Customer:
+      type: object
+      required:
+        - id
+        - userId
+        - kycTier
+        - kycStatus
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          pattern: '^cust_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+        userId:
+          type: string
+          pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "usr_01HX7B3ABCDEFGHJKMNPQRST"
+        firstName:
+          type: string
+          example: "Chidinma"
+        lastName:
+          type: string
+          example: "Eze"
+        email:
+          type: string
+          format: email
+          example: "chidinma.eze@yahoo.com"
+        phone:
+          type: string
+          pattern: '^\+234\d{10}$'
+          example: "+2348098765432"
+        dateOfBirth:
+          type: string
+          format: date
+          example: "1992-03-15"
+        gender:
+          type: string
+          enum: [MALE, FEMALE, OTHER, PREFER_NOT_TO_SAY]
+          example: "FEMALE"
+        address:
+          $ref: "#/components/schemas/Address"
+        kycTier:
+          $ref: "#/components/schemas/KycTier"
+        kycStatus:
+          type: string
+          enum: [UNVERIFIED, PENDING, VERIFIED, REJECTED, EXPIRED]
+          example: "VERIFIED"
+        dailyTransactionLimit:
+          $ref: "#/components/schemas/Money"
+        createdAt:
+          type: string
+          format: date-time
+          example: "2025-06-20T08:15:00Z"
+        updatedAt:
+          type: string
+          format: date-time
+          example: "2025-11-10T14:22:00Z"
+
+    Address:
+      type: object
+      properties:
+        street:
+          type: string
+          example: "15 Adeola Odeku Street"
+        city:
+          type: string
+          example: "Victoria Island"
+        state:
+          type: string
+          example: "Lagos"
+        country:
+          type: string
+          description: ISO 3166-1 alpha-2 country code
+          example: "NG"
+        postalCode:
+          type: string
+          example: "101241"
+        lga:
+          type: string
+          description: Local Government Area (Nigeria-specific)
+          example: "Eti-Osa"
+
+    KycTier:
+      type: string
+      enum: [TIER_0, TIER_1, TIER_2, TIER_3]
+      description: |
+        KYC verification tier:
+        - TIER_0: Basic registration (NGN 50,000/day)
+        - TIER_1: BVN/NIN verified (NGN 200,000/day)
+        - TIER_2: Gov ID + address (NGN 1,000,000/day)
+        - TIER_3: Full biometric (NGN 5,000,000/day)
+      example: "TIER_1"
+
+    KycStatus:
+      type: object
+      required:
+        - customerId
+        - currentTier
+        - status
+      properties:
+        customerId:
+          type: string
+          example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+        currentTier:
+          $ref: "#/components/schemas/KycTier"
+        status:
+          type: string
+          enum: [UNVERIFIED, PENDING, VERIFIED, REJECTED, EXPIRED]
+          example: "VERIFIED"
+        evidence:
+          type: array
+          items:
+            $ref: "#/components/schemas/IdentityEvidence"
+        pendingRequirements:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                example: "NIN"
+              description:
+                type: string
+                example: "National Identification Number verification required"
+        tierHistory:
+          type: array
+          items:
+            type: object
+            properties:
+              tier:
+                $ref: "#/components/schemas/KycTier"
+              achievedAt:
+                type: string
+                format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    IdentityEvidence:
+      type: object
+      required:
+        - id
+        - customerId
+        - type
+        - status
+      properties:
+        id:
+          type: string
+          pattern: '^kyc_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "kyc_01HX7B3ABCDEFGHJKMNPQRSU"
+        customerId:
+          type: string
+          example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+        type:
+          type: string
+          enum: [BVN, NIN, DOCUMENT, BIOMETRIC, PROOF_OF_ADDRESS]
+          example: "BVN"
+        status:
+          type: string
+          enum: [PENDING, VERIFIED, REJECTED, EXPIRED]
+          example: "VERIFIED"
+        provider:
+          type: string
+          description: Verification provider name
+          example: "NIBSS"
+        submittedAt:
+          type: string
+          format: date-time
+          example: "2025-08-12T09:30:00Z"
+        verifiedAt:
+          type: string
+          format: date-time
+          example: "2025-08-12T09:30:00Z"
+        expiresAt:
+          type: string
+          format: date-time
+          example: "2026-08-12T09:30:00Z"
+        rejectionReason:
+          type: string
+          nullable: true
+          example: null
+        metadata:
+          type: object
+          additionalProperties: true
+          example:
+            matchScore: 0.98
+            fieldsMatched: ["firstName", "lastName", "dateOfBirth"]
+
+    Money:
+      type: object
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          type: integer
+          description: Amount in minor currency units (kobo for NGN)
+          example: 1250000
+        currency:
+          type: string
+          description: ISO 4217 currency code
+          pattern: '^[A-Z]{3}$'
+          example: "NGN"
+
+    CursorPagination:
+      type: object
+      properties:
+        cursor:
+          type: string
+          nullable: true
+          description: Opaque cursor for the next page. Null if no more pages.
+          example: "eyJpZCI6Im9yZF8wMUhYN0IzQUJDREVGR0hKS01OUFFSU1QifQ=="
+        hasMore:
+          type: boolean
+          description: Whether more results are available
+          example: true
+        limit:
+          type: integer
+          description: Page size used for this response
+          example: 20
+
+    ProblemDetail:
+      type: object
+      description: RFC 7807 Problem Details for HTTP APIs
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+          example: "https://api.ivm.ng/problems/validation-error"
+        title:
+          type: string
+          example: "Validation Error"
+        status:
+          type: integer
+          example: 400
+        detail:
+          type: string
+          example: "The request contains invalid fields."
+        instance:
+          type: string
+          example: "/api/v1/customers/cust_01HX7B3ABCDEFGHJKMNPQRST"
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+              code:
+                type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request parameters or body
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/validation-error"
+            title: "Validation Error"
+            status: 400
+            detail: "The request body contains invalid fields."
+
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/unauthorized"
+            title: "Unauthorized"
+            status: 401
+            detail: "The access token is missing, invalid, or expired."
+
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/forbidden"
+            title: "Forbidden"
+            status: 403
+            detail: "You do not have permission to access this resource."
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/not-found"
+            title: "Not Found"
+            status: 404
+            detail: "The requested customer was not found."
+
+    TooManyRequests:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+            example: 60
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/rate-limit-exceeded"
+            title: "Too Many Requests"
+            status: 429
+            detail: "Rate limit exceeded. Please retry after 60 seconds."
+
+    InternalServerError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/internal-error"
+            title: "Internal Server Error"
+            status: 500
+            detail: "An unexpected error occurred. Please try again later."
+
+security:
+  - BearerAuth: []

@@ -1,0 +1,1519 @@
+openapi: "3.0.3"
+info:
+  title: IVM Platform - Device Management Service
+  description: |
+    Device management service for the IVM Platform. Handles device registration,
+    configuration, command dispatch, health monitoring, telemetry collection, and
+    OTA firmware updates across the entire device fleet.
+
+    ## Device Types
+    The platform supports 20 device types across various form factors:
+    vending machines, smart lockers, POS terminals, kiosks, cameras, sensors,
+    readers, scanners, displays, routers, printers, scales, door controllers,
+    environmental sensors, power management, and more.
+
+    ## Capabilities
+    Devices declare their capabilities during registration/authentication.
+    The platform uses capabilities to determine which operations a device supports.
+
+    ## Command Pattern
+    Commands are dispatched asynchronously. The caller receives a command ID
+    and polls for status, or receives updates via webhook.
+
+    ## ID Format
+    - Devices: `dev_01HX7B3ABC...`
+    - Commands: `cmd_01HX7B3DEF...`
+  version: "1.0.0"
+  contact:
+    name: IVM Platform Engineering
+    email: platform@ivm.ng
+  license:
+    name: Proprietary
+    url: https://ivm.ng/terms
+
+servers:
+  - url: https://api.ivm.ng
+    description: Production
+  - url: https://api.staging.ivm.ng
+    description: Staging
+  - url: http://localhost:8085
+    description: Local development
+
+tags:
+  - name: Devices
+    description: Device registration and management
+  - name: Commands
+    description: Device command dispatch and tracking
+  - name: Health
+    description: Device health and telemetry
+  - name: Fleet
+    description: Fleet-wide operations
+  - name: Updates
+    description: OTA firmware updates
+
+paths:
+  /api/v1/devices:
+    post:
+      operationId: registerDevice
+      tags:
+        - Devices
+      summary: Register device
+      description: |
+        Registers a new device in the fleet management system. This creates the
+        device record; certificate enrollment is handled separately via the
+        Identity service.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - deviceType
+                - serialNumber
+                - siteId
+              properties:
+                deviceType:
+                  $ref: "#/components/schemas/DeviceType"
+                serialNumber:
+                  type: string
+                  example: "IVM-VM-2025-NG-00142"
+                siteId:
+                  type: string
+                  example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+                name:
+                  type: string
+                  example: "Ikeja City Mall Vending Machine #3"
+                capabilities:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/Capability"
+                  example: ["DISPENSE", "ACCEPT_PAYMENT", "PRINT_RECEIPT", "DISPLAY", "NFC_READ", "CAMERA"]
+                location:
+                  type: object
+                  properties:
+                    latitude:
+                      type: number
+                      format: double
+                      example: 6.6018
+                    longitude:
+                      type: number
+                      format: double
+                      example: 3.3515
+                    floor:
+                      type: string
+                      example: "Ground Floor"
+                    zone:
+                      type: string
+                      example: "Food Court"
+                    description:
+                      type: string
+                      example: "Near entrance A, Ikeja City Mall"
+                configuration:
+                  type: object
+                  additionalProperties: true
+                  description: Initial device configuration
+                  example:
+                    timezone: "Africa/Lagos"
+                    language: "en"
+                    currency: "NGN"
+                    screenBrightness: 80
+                    volumeLevel: 50
+                metadata:
+                  type: object
+                  additionalProperties: true
+                  example:
+                    manufacturer: "IVM Technologies"
+                    model: "VM-500X"
+                    firmwareVersion: "2.1.0"
+                    hardwareRevision: "B2"
+            example:
+              deviceType: "VENDING_MACHINE"
+              serialNumber: "IVM-VM-2025-NG-00142"
+              siteId: "site_01HX7B3ABCDEFGHJKMNPQRST"
+              name: "Ikeja City Mall Vending Machine #3"
+              capabilities: ["DISPENSE", "ACCEPT_PAYMENT", "PRINT_RECEIPT", "DISPLAY", "NFC_READ", "CAMERA"]
+              location:
+                latitude: 6.6018
+                longitude: 3.3515
+                floor: "Ground Floor"
+                zone: "Food Court"
+                description: "Near entrance A, Ikeja City Mall"
+              configuration:
+                timezone: "Africa/Lagos"
+                language: "en"
+                currency: "NGN"
+              metadata:
+                manufacturer: "IVM Technologies"
+                model: "VM-500X"
+                firmwareVersion: "2.1.0"
+      responses:
+        "201":
+          description: Device registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+              example:
+                id: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+                deviceType: "VENDING_MACHINE"
+                serialNumber: "IVM-VM-2025-NG-00142"
+                siteId: "site_01HX7B3ABCDEFGHJKMNPQRST"
+                name: "Ikeja City Mall Vending Machine #3"
+                status: "PROVISIONING"
+                capabilities: ["DISPENSE", "ACCEPT_PAYMENT", "PRINT_RECEIPT", "DISPLAY", "NFC_READ", "CAMERA"]
+                location:
+                  latitude: 6.6018
+                  longitude: 3.3515
+                  floor: "Ground Floor"
+                  zone: "Food Court"
+                  description: "Near entrance A, Ikeja City Mall"
+                configuration:
+                  timezone: "Africa/Lagos"
+                  language: "en"
+                  currency: "NGN"
+                  screenBrightness: 80
+                  volumeLevel: 50
+                metadata:
+                  manufacturer: "IVM Technologies"
+                  model: "VM-500X"
+                  firmwareVersion: "2.1.0"
+                createdAt: "2025-11-15T10:00:00Z"
+                updatedAt: "2025-11-15T10:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Device serial number already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    get:
+      operationId: listDevices
+      tags:
+        - Devices
+      summary: List devices
+      description: Returns paginated devices with optional filtering by type, site, status, and capabilities.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - name: deviceType
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/DeviceType"
+        - name: siteId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [PROVISIONING, ONLINE, OFFLINE, MAINTENANCE, DECOMMISSIONED, ERROR]
+        - name: capability
+          in: query
+          required: false
+          description: Filter by required capability
+          schema:
+            $ref: "#/components/schemas/Capability"
+        - name: search
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Devices retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Device"
+                  pagination:
+                    $ref: "#/components/schemas/CursorPagination"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/devices/{id}:
+    get:
+      operationId: getDevice
+      tags:
+        - Devices
+      summary: Get device detail
+      description: Returns full device details including configuration, capabilities, and current status.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^dev_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+      responses:
+        "200":
+          description: Device detail retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+    patch:
+      operationId: updateDeviceConfig
+      tags:
+        - Devices
+      summary: Update device configuration
+      description: Updates device configuration, name, or location. Configuration changes are pushed to the device.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^dev_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                status:
+                  type: string
+                  enum: [ONLINE, OFFLINE, MAINTENANCE, DECOMMISSIONED]
+                configuration:
+                  type: object
+                  additionalProperties: true
+                location:
+                  type: object
+                  properties:
+                    latitude:
+                      type: number
+                      format: double
+                    longitude:
+                      type: number
+                      format: double
+                    floor:
+                      type: string
+                    zone:
+                      type: string
+                    description:
+                      type: string
+            example:
+              configuration:
+                screenBrightness: 90
+                volumeLevel: 60
+                maintenanceMode: false
+      responses:
+        "200":
+          description: Device updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/devices/{id}/commands:
+    post:
+      operationId: sendDeviceCommand
+      tags:
+        - Commands
+      summary: Send command to device
+      description: |
+        Dispatches a command to the device asynchronously. Returns a command ID
+        for status tracking. Commands are queued and delivered when the device
+        is online.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^dev_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - type
+              properties:
+                type:
+                  type: string
+                  enum:
+                    - DISPENSE
+                    - OPEN_COMPARTMENT
+                    - LOCK_COMPARTMENT
+                    - REBOOT
+                    - RESTART_SERVICE
+                    - UPDATE_CONFIG
+                    - ENABLE_MAINTENANCE
+                    - DISABLE_MAINTENANCE
+                    - RUN_DIAGNOSTIC
+                    - CAPTURE_PHOTO
+                    - PLAY_AUDIO
+                    - DISPLAY_MESSAGE
+                    - SYNC_INVENTORY
+                    - SYNC_CATALOG
+                    - CLEAR_CACHE
+                    - COLLECT_LOGS
+                  example: "DISPENSE"
+                payload:
+                  type: object
+                  additionalProperties: true
+                  description: Command-specific parameters
+                  example:
+                    slot: "A3"
+                    itemId: "itm_01HX7B3ABCDEFGHJKMNPQRSU"
+                    quantity: 1
+                priority:
+                  type: string
+                  enum: [LOW, NORMAL, HIGH, CRITICAL]
+                  default: "NORMAL"
+                  example: "HIGH"
+                timeoutSeconds:
+                  type: integer
+                  minimum: 5
+                  maximum: 300
+                  default: 60
+                  description: Command execution timeout
+                  example: 30
+            example:
+              type: "DISPENSE"
+              payload:
+                slot: "A3"
+                itemId: "itm_01HX7B3ABCDEFGHJKMNPQRSU"
+                quantity: 1
+              priority: "HIGH"
+              timeoutSeconds: 30
+      responses:
+        "202":
+          description: Command queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceCommand"
+              example:
+                id: "cmd_01HX7B3DEFGHJKMNPQRSTUVW"
+                deviceId: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+                type: "DISPENSE"
+                status: "QUEUED"
+                priority: "HIGH"
+                payload:
+                  slot: "A3"
+                  itemId: "itm_01HX7B3ABCDEFGHJKMNPQRSU"
+                  quantity: 1
+                timeoutSeconds: 30
+                createdAt: "2025-11-15T10:31:00Z"
+                expiresAt: "2025-11-15T10:31:30Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Device not in a state to accept commands
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/device-unavailable"
+                title: "Device Unavailable"
+                status: 409
+                detail: "Device is in MAINTENANCE mode and cannot accept commands."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/devices/{id}/commands/{cmdId}:
+    get:
+      operationId: getCommandStatus
+      tags:
+        - Commands
+      summary: Get command status
+      description: Returns the current status and result of a dispatched command.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^dev_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+        - name: cmdId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^cmd_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "cmd_01HX7B3DEFGHJKMNPQRSTUVW"
+      responses:
+        "200":
+          description: Command status retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceCommand"
+              example:
+                id: "cmd_01HX7B3DEFGHJKMNPQRSTUVW"
+                deviceId: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+                type: "DISPENSE"
+                status: "COMPLETED"
+                priority: "HIGH"
+                payload:
+                  slot: "A3"
+                  itemId: "itm_01HX7B3ABCDEFGHJKMNPQRSU"
+                  quantity: 1
+                result:
+                  success: true
+                  dispensedQuantity: 1
+                  slot: "A3"
+                  remainingStock: 14
+                startedAt: "2025-11-15T10:31:02Z"
+                completedAt: "2025-11-15T10:31:08Z"
+                createdAt: "2025-11-15T10:31:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/devices/{id}/health:
+    get:
+      operationId: getDeviceHealth
+      tags:
+        - Health
+      summary: Device health status
+      description: |
+        Returns current health status of a device including connectivity,
+        component health, error counts, and last heartbeat.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^dev_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+      responses:
+        "200":
+          description: Device health retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceHealth"
+              example:
+                deviceId: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+                overallStatus: "HEALTHY"
+                connectivity:
+                  status: "ONLINE"
+                  lastHeartbeat: "2025-11-15T10:29:55Z"
+                  signalStrength: -45
+                  connectionType: "4G_LTE"
+                  ipAddress: "102.89.23.142"
+                components:
+                  - name: "DISPENSER"
+                    status: "HEALTHY"
+                    details:
+                      activeSlots: 24
+                      emptySlots: 2
+                      jammedSlots: 0
+                  - name: "PAYMENT_TERMINAL"
+                    status: "HEALTHY"
+                    details:
+                      lastTransaction: "2025-11-15T10:25:00Z"
+                      nfcEnabled: true
+                  - name: "DISPLAY"
+                    status: "HEALTHY"
+                    details:
+                      brightness: 80
+                      resolution: "1920x1080"
+                  - name: "CAMERA"
+                    status: "HEALTHY"
+                    details:
+                      resolution: "1080p"
+                      nightVision: true
+                  - name: "PRINTER"
+                    status: "WARNING"
+                    details:
+                      paperLevel: 15
+                      message: "Low paper"
+                errors:
+                  last24h: 2
+                  last7d: 8
+                  recentErrors:
+                    - timestamp: "2025-11-15T08:12:00Z"
+                      code: "DISP_TIMEOUT"
+                      message: "Dispense timeout on slot B2"
+                      severity: "WARNING"
+                uptime:
+                  currentSession: "72h 14m"
+                  last30dPercent: 99.7
+                firmware:
+                  currentVersion: "2.1.0"
+                  latestVersion: "2.2.0"
+                  updateAvailable: true
+                reportedAt: "2025-11-15T10:30:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/devices/{id}/telemetry:
+    get:
+      operationId: getDeviceTelemetry
+      tags:
+        - Health
+      summary: Device telemetry data
+      description: |
+        Returns telemetry data from the device including sensor readings,
+        resource utilization, and operational metrics.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^dev_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+        - name: metrics
+          in: query
+          required: false
+          description: Comma-separated list of metrics to retrieve
+          schema:
+            type: string
+            example: "cpu,memory,temperature,network"
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: resolution
+          in: query
+          required: false
+          description: Data point resolution
+          schema:
+            type: string
+            enum: [1m, 5m, 15m, 1h, 6h, 1d]
+            default: "5m"
+      responses:
+        "200":
+          description: Telemetry data retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deviceId:
+                    type: string
+                  period:
+                    type: object
+                    properties:
+                      from:
+                        type: string
+                        format: date-time
+                      to:
+                        type: string
+                        format: date-time
+                      resolution:
+                        type: string
+                  metrics:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          timestamp:
+                            type: string
+                            format: date-time
+                          value:
+                            type: number
+                          unit:
+                            type: string
+              example:
+                deviceId: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+                period:
+                  from: "2025-11-15T09:00:00Z"
+                  to: "2025-11-15T10:00:00Z"
+                  resolution: "5m"
+                metrics:
+                  cpu:
+                    - timestamp: "2025-11-15T09:00:00Z"
+                      value: 23.5
+                      unit: "percent"
+                    - timestamp: "2025-11-15T09:05:00Z"
+                      value: 18.2
+                      unit: "percent"
+                  temperature:
+                    - timestamp: "2025-11-15T09:00:00Z"
+                      value: 42.1
+                      unit: "celsius"
+                    - timestamp: "2025-11-15T09:05:00Z"
+                      value: 41.8
+                      unit: "celsius"
+                  memory:
+                    - timestamp: "2025-11-15T09:00:00Z"
+                      value: 512
+                      unit: "megabytes"
+                  network:
+                    - timestamp: "2025-11-15T09:00:00Z"
+                      value: 2.4
+                      unit: "mbps"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/devices/{id}/update:
+    post:
+      operationId: triggerOtaUpdate
+      tags:
+        - Updates
+      summary: Trigger OTA update
+      description: |
+        Triggers an over-the-air firmware update for the device. The update
+        is downloaded and applied during the next maintenance window or immediately
+        if forced.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^dev_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - targetVersion
+              properties:
+                targetVersion:
+                  type: string
+                  description: Target firmware version
+                  example: "2.2.0"
+                forceImmediate:
+                  type: boolean
+                  default: false
+                  description: Force immediate update (device will restart)
+                  example: false
+                scheduledAt:
+                  type: string
+                  format: date-time
+                  description: Schedule update for a specific time
+                  example: "2025-11-16T02:00:00Z"
+                rollbackOnFailure:
+                  type: boolean
+                  default: true
+            example:
+              targetVersion: "2.2.0"
+              forceImmediate: false
+              scheduledAt: "2025-11-16T02:00:00Z"
+              rollbackOnFailure: true
+      responses:
+        "202":
+          description: Update scheduled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updateId:
+                    type: string
+                    example: "upd_01HX7B3ABCDEFGHJKMNPQRST"
+                  deviceId:
+                    type: string
+                    example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+                  currentVersion:
+                    type: string
+                    example: "2.1.0"
+                  targetVersion:
+                    type: string
+                    example: "2.2.0"
+                  status:
+                    type: string
+                    enum: [SCHEDULED, DOWNLOADING, INSTALLING, COMPLETED, FAILED, ROLLED_BACK]
+                    example: "SCHEDULED"
+                  scheduledAt:
+                    type: string
+                    format: date-time
+                    example: "2025-11-16T02:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Update already in progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/devices/fleet/health:
+    get:
+      operationId: getFleetHealth
+      tags:
+        - Fleet
+      summary: Fleet health overview
+      description: Returns aggregated health status across the entire device fleet or filtered subset.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: siteId
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: deviceType
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/DeviceType"
+      responses:
+        "200":
+          description: Fleet health retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalDevices:
+                    type: integer
+                  statusBreakdown:
+                    type: object
+                    properties:
+                      online:
+                        type: integer
+                      offline:
+                        type: integer
+                      maintenance:
+                        type: integer
+                      error:
+                        type: integer
+                      provisioning:
+                        type: integer
+                  healthBreakdown:
+                    type: object
+                    properties:
+                      healthy:
+                        type: integer
+                      warning:
+                        type: integer
+                      critical:
+                        type: integer
+                      unknown:
+                        type: integer
+                  alertsSummary:
+                    type: object
+                    properties:
+                      critical:
+                        type: integer
+                      warning:
+                        type: integer
+                      info:
+                        type: integer
+                  uptimeAverage:
+                    type: number
+                    format: float
+                    description: Average uptime percentage over last 30 days
+                  devicesNeedingAttention:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        deviceId:
+                          type: string
+                        name:
+                          type: string
+                        issue:
+                          type: string
+                        severity:
+                          type: string
+              example:
+                totalDevices: 342
+                statusBreakdown:
+                  online: 318
+                  offline: 8
+                  maintenance: 12
+                  error: 3
+                  provisioning: 1
+                healthBreakdown:
+                  healthy: 305
+                  warning: 28
+                  critical: 5
+                  unknown: 4
+                alertsSummary:
+                  critical: 5
+                  warning: 23
+                  info: 47
+                uptimeAverage: 99.2
+                devicesNeedingAttention:
+                  - deviceId: "dev_01HX7B3DEFGHJKMNPQRSTUV1"
+                    name: "Lekki Phase 1 Locker #7"
+                    issue: "Compartment C4 door sensor malfunction"
+                    severity: "CRITICAL"
+                  - deviceId: "dev_01HX7B3DEFGHJKMNPQRSTUV2"
+                    name: "Airport Terminal 2 Kiosk #1"
+                    issue: "Receipt printer offline"
+                    severity: "WARNING"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/devices/fleet/commands:
+    post:
+      operationId: sendFleetCommand
+      tags:
+        - Fleet
+      summary: Send group command
+      description: |
+        Dispatches a command to multiple devices matching the specified criteria.
+        Useful for fleet-wide operations like config updates, resets, or catalog syncs.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - command
+                - target
+              properties:
+                command:
+                  type: object
+                  required:
+                    - type
+                  properties:
+                    type:
+                      type: string
+                      enum: [UPDATE_CONFIG, SYNC_CATALOG, SYNC_INVENTORY, REBOOT, COLLECT_LOGS, CLEAR_CACHE]
+                      example: "SYNC_CATALOG"
+                    payload:
+                      type: object
+                      additionalProperties: true
+                    priority:
+                      type: string
+                      enum: [LOW, NORMAL, HIGH, CRITICAL]
+                      default: "NORMAL"
+                    timeoutSeconds:
+                      type: integer
+                      default: 120
+                target:
+                  type: object
+                  description: Target device selection criteria
+                  properties:
+                    deviceIds:
+                      type: array
+                      items:
+                        type: string
+                      description: Specific device IDs (overrides other filters)
+                    siteIds:
+                      type: array
+                      items:
+                        type: string
+                    deviceTypes:
+                      type: array
+                      items:
+                        $ref: "#/components/schemas/DeviceType"
+                    capabilities:
+                      type: array
+                      items:
+                        $ref: "#/components/schemas/Capability"
+                    status:
+                      type: array
+                      items:
+                        type: string
+                        enum: [ONLINE]
+                rolloutStrategy:
+                  type: string
+                  enum: [ALL_AT_ONCE, ROLLING, CANARY]
+                  default: "ROLLING"
+                  description: How to roll out the command across devices
+                rolloutPercentage:
+                  type: integer
+                  minimum: 1
+                  maximum: 100
+                  default: 100
+                  description: Percentage of target devices (for canary)
+            example:
+              command:
+                type: "SYNC_CATALOG"
+                priority: "NORMAL"
+                timeoutSeconds: 120
+              target:
+                siteIds: ["site_01HX7B3ABCDEFGHJKMNPQRST"]
+                deviceTypes: ["VENDING_MACHINE", "KIOSK"]
+                status: ["ONLINE"]
+              rolloutStrategy: "ROLLING"
+      responses:
+        "202":
+          description: Fleet command dispatched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batchCommandId:
+                    type: string
+                    example: "bcmd_01HX7B3ABCDEFGHJKMNPQRST"
+                  targetDeviceCount:
+                    type: integer
+                    example: 15
+                  status:
+                    type: string
+                    enum: [DISPATCHING, IN_PROGRESS, COMPLETED, PARTIALLY_COMPLETED, FAILED]
+                    example: "DISPATCHING"
+                  rolloutStrategy:
+                    type: string
+                    example: "ROLLING"
+              example:
+                batchCommandId: "bcmd_01HX7B3ABCDEFGHJKMNPQRST"
+                targetDeviceCount: 15
+                status: "DISPATCHING"
+                rolloutStrategy: "ROLLING"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    TenantId:
+      name: X-Tenant-ID
+      in: header
+      required: true
+      schema:
+        type: string
+        example: "tnt_01HX7B3ABCDEFGHJKMNPQRST"
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  headers:
+    X-RateLimit-Limit:
+      schema:
+        type: integer
+        example: 100
+    X-RateLimit-Remaining:
+      schema:
+        type: integer
+        example: 95
+    X-RateLimit-Reset:
+      schema:
+        type: integer
+        format: int64
+
+  schemas:
+    Device:
+      type: object
+      required:
+        - id
+        - deviceType
+        - serialNumber
+        - siteId
+        - status
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          pattern: '^dev_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+        deviceType:
+          $ref: "#/components/schemas/DeviceType"
+        serialNumber:
+          type: string
+          example: "IVM-VM-2025-NG-00142"
+        siteId:
+          type: string
+          example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+        name:
+          type: string
+          example: "Ikeja City Mall Vending Machine #3"
+        status:
+          type: string
+          enum: [PROVISIONING, ONLINE, OFFLINE, MAINTENANCE, DECOMMISSIONED, ERROR]
+          example: "ONLINE"
+        capabilities:
+          type: array
+          items:
+            $ref: "#/components/schemas/Capability"
+        location:
+          type: object
+          properties:
+            latitude:
+              type: number
+              format: double
+              example: 6.6018
+            longitude:
+              type: number
+              format: double
+              example: 3.3515
+            floor:
+              type: string
+            zone:
+              type: string
+            description:
+              type: string
+        configuration:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+          example:
+            manufacturer: "IVM Technologies"
+            model: "VM-500X"
+            firmwareVersion: "2.1.0"
+        lastHeartbeat:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    DeviceType:
+      type: string
+      enum:
+        - VENDING_MACHINE
+        - SMART_LOCKER
+        - POS_TERMINAL
+        - KIOSK
+        - CAMERA
+        - WEIGHT_SENSOR
+        - RFID_READER
+        - NFC_READER
+        - BIOMETRIC_SCANNER
+        - DISPLAY_SCREEN
+        - ROUTER_GATEWAY
+        - RECEIPT_PRINTER
+        - BARCODE_SCANNER
+        - DIGITAL_SCALE
+        - DOOR_CONTROLLER
+        - ENVIRONMENTAL_SENSOR
+        - POWER_MANAGEMENT
+        - AUDIO_SYSTEM
+        - LED_INDICATOR
+        - CUSTOM
+      example: "VENDING_MACHINE"
+
+    Capability:
+      type: string
+      enum:
+        - DISPENSE
+        - ACCEPT_PAYMENT
+        - PRINT_RECEIPT
+        - DISPLAY
+        - NFC_READ
+        - NFC_WRITE
+        - RFID_READ
+        - BARCODE_SCAN
+        - QR_SCAN
+        - CAMERA
+        - BIOMETRIC_CAPTURE
+        - WEIGHT_MEASURE
+        - TEMPERATURE_SENSE
+        - HUMIDITY_SENSE
+        - DOOR_CONTROL
+        - AUDIO_PLAYBACK
+        - NETWORK_RELAY
+        - OTA_UPDATE
+      example: "DISPENSE"
+
+    DeviceCommand:
+      type: object
+      required:
+        - id
+        - deviceId
+        - type
+        - status
+        - createdAt
+      properties:
+        id:
+          type: string
+          pattern: '^cmd_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "cmd_01HX7B3DEFGHJKMNPQRSTUVW"
+        deviceId:
+          type: string
+          example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+        type:
+          type: string
+          example: "DISPENSE"
+        status:
+          type: string
+          enum: [QUEUED, SENT, ACKNOWLEDGED, IN_PROGRESS, COMPLETED, FAILED, TIMED_OUT, CANCELLED]
+          example: "QUEUED"
+        priority:
+          type: string
+          enum: [LOW, NORMAL, HIGH, CRITICAL]
+          example: "NORMAL"
+        payload:
+          type: object
+          additionalProperties: true
+        result:
+          type: object
+          additionalProperties: true
+          nullable: true
+        failureReason:
+          type: string
+          nullable: true
+        timeoutSeconds:
+          type: integer
+          example: 60
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+
+    DeviceHealth:
+      type: object
+      required:
+        - deviceId
+        - overallStatus
+        - reportedAt
+      properties:
+        deviceId:
+          type: string
+          example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+        overallStatus:
+          type: string
+          enum: [HEALTHY, WARNING, CRITICAL, UNKNOWN]
+          example: "HEALTHY"
+        connectivity:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [ONLINE, OFFLINE, INTERMITTENT]
+            lastHeartbeat:
+              type: string
+              format: date-time
+            signalStrength:
+              type: integer
+              description: Signal strength in dBm
+            connectionType:
+              type: string
+              enum: [ETHERNET, WIFI, 4G_LTE, 5G, SATELLITE]
+            ipAddress:
+              type: string
+        components:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              status:
+                type: string
+                enum: [HEALTHY, WARNING, CRITICAL, OFFLINE]
+              details:
+                type: object
+                additionalProperties: true
+        errors:
+          type: object
+          properties:
+            last24h:
+              type: integer
+            last7d:
+              type: integer
+            recentErrors:
+              type: array
+              items:
+                type: object
+                properties:
+                  timestamp:
+                    type: string
+                    format: date-time
+                  code:
+                    type: string
+                  message:
+                    type: string
+                  severity:
+                    type: string
+                    enum: [INFO, WARNING, ERROR, CRITICAL]
+        uptime:
+          type: object
+          properties:
+            currentSession:
+              type: string
+              description: Human-readable uptime duration
+            last30dPercent:
+              type: number
+              format: float
+        firmware:
+          type: object
+          properties:
+            currentVersion:
+              type: string
+            latestVersion:
+              type: string
+            updateAvailable:
+              type: boolean
+        reportedAt:
+          type: string
+          format: date-time
+
+    Money:
+      type: object
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          type: integer
+          description: Amount in minor currency units (kobo for NGN)
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          example: "NGN"
+
+    CursorPagination:
+      type: object
+      properties:
+        cursor:
+          type: string
+          nullable: true
+        hasMore:
+          type: boolean
+        limit:
+          type: integer
+
+    ProblemDetail:
+      type: object
+      description: RFC 7807 Problem Details
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+              code:
+                type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/validation-error"
+            title: "Validation Error"
+            status: 400
+            detail: "The request body contains invalid fields."
+
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/unauthorized"
+            title: "Unauthorized"
+            status: 401
+            detail: "The access token is missing, invalid, or expired."
+
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/forbidden"
+            title: "Forbidden"
+            status: 403
+            detail: "You do not have permission to perform this action."
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/not-found"
+            title: "Not Found"
+            status: 404
+            detail: "The requested device was not found."
+
+    InternalServerError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/internal-error"
+            title: "Internal Server Error"
+            status: 500
+            detail: "An unexpected error occurred."
+
+security:
+  - BearerAuth: []

@@ -1,0 +1,1489 @@
+openapi: "3.0.3"
+info:
+  title: IVM Platform - Autonomous Store Module
+  description: |
+    Autonomous store module for the IVM Platform. Manages the "just walk out" shopping
+    experience including session management, computer-vision basket tracking,
+    reconciliation, automatic charging, and dispute handling.
+
+    ## Shopping Flow
+    1. Customer enters store via QR, NFC, card, or face recognition (ENTRY_AUTHORIZED)
+    2. Customer shops freely, sensors track item picks/puts (SHOPPING)
+    3. Customer exits the store (EXIT_DETECTED)
+    4. System reconciles sensor data to determine final basket (RECONCILING)
+    5. Customer is charged for items taken (CHARGING)
+    6. Session completes (COMPLETED) or requires review (REVIEW_REQUIRED)
+
+    ## Sensor Fusion
+    The store uses multiple sensor types (cameras, weight sensors, RFID, shelf sensors)
+    to track customer behavior. Sensor events are fused to determine basket contents.
+
+    ## ID Format
+    - Sessions: `ssn_01HX7B3ABC...`
+    - Sensor events: `evt_01HX7B3DEF...`
+  version: "1.0.0"
+  contact:
+    name: IVM Platform Engineering
+    email: platform@ivm.ng
+  license:
+    name: Proprietary
+    url: https://ivm.ng/terms
+
+servers:
+  - url: https://api.ivm.ng
+    description: Production
+  - url: https://api.staging.ivm.ng
+    description: Staging
+  - url: http://localhost:8087
+    description: Local development
+
+tags:
+  - name: Sessions
+    description: Shopping session management
+  - name: Basket
+    description: Basket tracking and reconciliation
+  - name: Charging
+    description: Session charging and disputes
+  - name: Store Operations
+    description: Store inventory and analytics
+
+paths:
+  /api/v1/store/sessions:
+    post:
+      operationId: createSession
+      tags:
+        - Sessions
+      summary: Create shopping session (entry)
+      description: |
+        Creates a new shopping session when a customer enters the autonomous store.
+        The entry method determines the authentication flow. The session starts in
+        ENTRY_AUTHORIZED status after successful identity verification.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - storeId
+                - entryMethod
+                - customerId
+              properties:
+                storeId:
+                  type: string
+                  example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+                entryMethod:
+                  $ref: "#/components/schemas/EntryMethod"
+                customerId:
+                  type: string
+                  example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                entryDeviceId:
+                  type: string
+                  description: Device ID of the entry gate/reader
+                  example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+                entryCredential:
+                  type: object
+                  description: Entry credential data based on method
+                  properties:
+                    qrPayload:
+                      type: string
+                      description: Scanned QR code data
+                    nfcPayload:
+                      type: string
+                      description: NFC tag data
+                    cardToken:
+                      type: string
+                      description: Payment card token
+                    faceEmbedding:
+                      type: string
+                      description: Base64-encoded face embedding for matching
+                paymentMethodId:
+                  type: string
+                  description: Pre-authorized payment method for charging
+                  example: "pm_01HX7B3DEFGHJKMNPQRSTUVW"
+            example:
+              storeId: "site_01HX7B3ABCDEFGHJKMNPQRST"
+              entryMethod: "QR"
+              customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+              entryDeviceId: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+              entryCredential:
+                qrPayload: "ivm:entry:cust_01HX7B3ABCDEFGHJKMNPQRST:1700045400:sig_abc123"
+              paymentMethodId: "pm_01HX7B3DEFGHJKMNPQRSTUVW"
+      responses:
+        "201":
+          description: Shopping session created
+          headers:
+            X-RateLimit-Limit:
+              $ref: "#/components/headers/X-RateLimit-Limit"
+            X-RateLimit-Remaining:
+              $ref: "#/components/headers/X-RateLimit-Remaining"
+            X-RateLimit-Reset:
+              $ref: "#/components/headers/X-RateLimit-Reset"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShoppingSession"
+              example:
+                id: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+                storeId: "site_01HX7B3ABCDEFGHJKMNPQRST"
+                customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                status: "ENTRY_AUTHORIZED"
+                entryMethod: "QR"
+                entryDeviceId: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+                paymentMethodId: "pm_01HX7B3DEFGHJKMNPQRSTUVW"
+                enteredAt: "2025-11-15T10:30:00Z"
+                exitedAt: null
+                basket: []
+                basketTotal:
+                  amount: 0
+                  currency: "NGN"
+                createdAt: "2025-11-15T10:30:00Z"
+                updatedAt: "2025-11-15T10:30:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Entry denied (e.g., no valid payment method, banned customer)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/entry-denied"
+                title: "Entry Denied"
+                status: 403
+                detail: "No valid payment method on file. Please add a payment method before entering."
+        "409":
+          description: Customer already has an active session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/active-session-exists"
+                title: "Active Session Exists"
+                status: 409
+                detail: "Customer already has an active shopping session at this store."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/store/sessions/{id}:
+    get:
+      operationId: getSession
+      tags:
+        - Sessions
+      summary: Get shopping session
+      description: Returns the full detail of a shopping session including current basket.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^ssn_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+      responses:
+        "200":
+          description: Session retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShoppingSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/store/sessions/{id}/exit:
+    post:
+      operationId: recordExit
+      tags:
+        - Sessions
+      summary: Record customer exit
+      description: |
+        Records that the customer has exited the store. Transitions the session
+        to EXIT_DETECTED and triggers the reconciliation process.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^ssn_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                exitDeviceId:
+                  type: string
+                  description: Device ID of the exit gate
+                  example: "dev_01HX7B3DEFGHJKMNPQRSTUVX"
+                exitMethod:
+                  type: string
+                  enum: [GATE, TIMEOUT, MANUAL]
+                  default: "GATE"
+                  description: How the exit was detected
+            example:
+              exitDeviceId: "dev_01HX7B3DEFGHJKMNPQRSTUVX"
+              exitMethod: "GATE"
+      responses:
+        "200":
+          description: Exit recorded, reconciliation initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShoppingSession"
+              example:
+                id: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+                storeId: "site_01HX7B3ABCDEFGHJKMNPQRST"
+                customerId: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+                status: "EXIT_DETECTED"
+                enteredAt: "2025-11-15T10:30:00Z"
+                exitedAt: "2025-11-15T10:42:00Z"
+                duration: "12m 00s"
+                updatedAt: "2025-11-15T10:42:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Session not in SHOPPING status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/store/sessions/{id}/basket:
+    get:
+      operationId: getBasket
+      tags:
+        - Basket
+      summary: Get session basket
+      description: |
+        Returns the current or final basket for a shopping session. During SHOPPING,
+        this is a real-time view from sensor fusion. After RECONCILING, this is the
+        final reconciled basket.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^ssn_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+      responses:
+        "200":
+          description: Basket retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId:
+                    type: string
+                    example: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+                  status:
+                    type: string
+                    enum: [TRACKING, RECONCILED, FINAL]
+                    example: "RECONCILED"
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BasketItem"
+                  subtotal:
+                    $ref: "#/components/schemas/Money"
+                  tax:
+                    $ref: "#/components/schemas/Money"
+                  total:
+                    $ref: "#/components/schemas/Money"
+                  itemCount:
+                    type: integer
+                  confidence:
+                    type: number
+                    format: float
+                    minimum: 0
+                    maximum: 1
+                    description: Overall basket confidence score from sensor fusion
+                    example: 0.96
+              example:
+                sessionId: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+                status: "RECONCILED"
+                items:
+                  - catalogItemId: "itm_01HX7B3ABCDEFGHJKMNPQRSU"
+                    name: "Peak Milk 400g"
+                    sku: "PEAK-MILK-400G"
+                    quantity: 2
+                    unitPrice:
+                      amount: 175000
+                      currency: "NGN"
+                    lineTotal:
+                      amount: 350000
+                      currency: "NGN"
+                    confidence: 0.98
+                    sensorEvents:
+                      - eventId: "evt_01HX7B3ABCDEFGHJKMNPQRST"
+                        type: "SHELF_PICKUP"
+                        timestamp: "2025-11-15T10:33:12Z"
+                      - eventId: "evt_01HX7B3ABCDEFGHJKMNPQRSU"
+                        type: "WEIGHT_CHANGE"
+                        timestamp: "2025-11-15T10:33:12Z"
+                  - catalogItemId: "itm_01HX7B3ABCDEFGHJKMNPQRSV"
+                    name: "Indomie Chicken 70g"
+                    sku: "INDOMIE-CHKN-70G"
+                    quantity: 3
+                    unitPrice:
+                      amount: 35000
+                      currency: "NGN"
+                    lineTotal:
+                      amount: 105000
+                      currency: "NGN"
+                    confidence: 0.95
+                    sensorEvents:
+                      - eventId: "evt_01HX7B3ABCDEFGHJKMNPQRSV"
+                        type: "SHELF_PICKUP"
+                        timestamp: "2025-11-15T10:35:45Z"
+                  - catalogItemId: "itm_01HX7B3ABCDEFGHJKMNPQRSW"
+                    name: "Coca-Cola 50cl PET"
+                    sku: "COKE-50CL"
+                    quantity: 1
+                    unitPrice:
+                      amount: 50000
+                      currency: "NGN"
+                    lineTotal:
+                      amount: 50000
+                      currency: "NGN"
+                    confidence: 0.99
+                    sensorEvents:
+                      - eventId: "evt_01HX7B3ABCDEFGHJKMNPQRSX"
+                        type: "SHELF_PICKUP"
+                        timestamp: "2025-11-15T10:38:20Z"
+                subtotal:
+                  amount: 505000
+                  currency: "NGN"
+                tax:
+                  amount: 0
+                  currency: "NGN"
+                total:
+                  amount: 505000
+                  currency: "NGN"
+                itemCount: 6
+                confidence: 0.96
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/store/sessions/{id}/reconcile:
+    post:
+      operationId: reconcileSession
+      tags:
+        - Basket
+      summary: Reconcile session basket
+      description: |
+        Triggers or re-triggers reconciliation of the session basket. This
+        processes all sensor events and applies the sensor fusion algorithm
+        to determine the final basket contents. Normally triggered automatically
+        after exit, but can be invoked manually for re-reconciliation.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^ssn_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                overrideItems:
+                  type: array
+                  description: Manual override of basket items (operator only)
+                  items:
+                    type: object
+                    required:
+                      - catalogItemId
+                      - quantity
+                    properties:
+                      catalogItemId:
+                        type: string
+                      quantity:
+                        type: integer
+                        minimum: 0
+                reason:
+                  type: string
+                  description: Reason for manual reconciliation
+                  example: "Sensor data review by operator"
+      responses:
+        "200":
+          description: Reconciliation complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShoppingSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Session not in reconcilable status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/store/sessions/{id}/charge:
+    post:
+      operationId: chargeSession
+      tags:
+        - Charging
+      summary: Charge session
+      description: |
+        Charges the customer for the reconciled basket. Uses the pre-authorized
+        payment method from session creation. Creates an order and payment record.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^ssn_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                paymentMethodId:
+                  type: string
+                  description: Override payment method (if different from session default)
+            example: {}
+      responses:
+        "200":
+          description: Session charged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  session:
+                    $ref: "#/components/schemas/ShoppingSession"
+                  orderId:
+                    type: string
+                    example: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                  paymentId:
+                    type: string
+                    example: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+                  chargedAmount:
+                    $ref: "#/components/schemas/Money"
+              example:
+                session:
+                  id: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+                  status: "COMPLETED"
+                  updatedAt: "2025-11-15T10:45:00Z"
+                orderId: "ord_01HX7B3ABCDEFGHJKMNPQRST"
+                paymentId: "pay_01HX7B3ABCDEFGHJKMNPQRST"
+                chargedAmount:
+                  amount: 505000
+                  currency: "NGN"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Session not in chargeable status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "422":
+          description: Payment failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+              example:
+                type: "https://api.ivm.ng/problems/payment-failed"
+                title: "Payment Failed"
+                status: 422
+                detail: "Payment was declined. Insufficient funds on card ending 0403."
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/store/sessions/{id}/dispute:
+    post:
+      operationId: disputeSession
+      tags:
+        - Charging
+      summary: Dispute session
+      description: |
+        Raises a dispute for a shopping session. The customer can dispute
+        individual items or the entire basket. Transitions the session to
+        DISPUTED status for operator review.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^ssn_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reason
+                - category
+              properties:
+                reason:
+                  type: string
+                  maxLength: 2000
+                  example: "I did not pick up the Indomie noodles. I picked them up but put them back."
+                category:
+                  type: string
+                  enum:
+                    - WRONG_ITEM
+                    - WRONG_QUANTITY
+                    - ITEM_NOT_TAKEN
+                    - OVERCHARGED
+                    - ENTRY_ERROR
+                    - OTHER
+                  example: "ITEM_NOT_TAKEN"
+                disputedItems:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - catalogItemId
+                    properties:
+                      catalogItemId:
+                        type: string
+                        example: "itm_01HX7B3ABCDEFGHJKMNPQRSV"
+                      claimedQuantity:
+                        type: integer
+                        description: What the customer claims they took
+                        example: 0
+                      chargedQuantity:
+                        type: integer
+                        description: What they were charged for
+                        example: 3
+                  description: Specific items being disputed (empty = entire basket)
+            example:
+              reason: "I did not pick up the Indomie noodles. I picked them up but put them back."
+              category: "ITEM_NOT_TAKEN"
+              disputedItems:
+                - catalogItemId: "itm_01HX7B3ABCDEFGHJKMNPQRSV"
+                  claimedQuantity: 0
+                  chargedQuantity: 3
+      responses:
+        "201":
+          description: Dispute created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  disputeId:
+                    type: string
+                    example: "disp_01HX7B3ABCDEFGHJKMNPQRST"
+                  sessionId:
+                    type: string
+                    example: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+                  status:
+                    type: string
+                    enum: [OPEN, REVIEWING, RESOLVED_REFUND, RESOLVED_ADJUSTMENT, RESOLVED_REJECTED, CLOSED]
+                    example: "OPEN"
+                  category:
+                    type: string
+                    example: "ITEM_NOT_TAKEN"
+                  disputedAmount:
+                    $ref: "#/components/schemas/Money"
+                  estimatedResolutionTime:
+                    type: string
+                    format: date-time
+                  createdAt:
+                    type: string
+                    format: date-time
+              example:
+                disputeId: "disp_01HX7B3ABCDEFGHJKMNPQRST"
+                sessionId: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+                status: "OPEN"
+                category: "ITEM_NOT_TAKEN"
+                disputedAmount:
+                  amount: 105000
+                  currency: "NGN"
+                estimatedResolutionTime: "2025-11-16T10:00:00Z"
+                createdAt: "2025-11-15T11:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Session not in disputable status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetail"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/store/sessions/{id}/replay:
+    get:
+      operationId: getSessionReplay
+      tags:
+        - Sessions
+      summary: Get session replay data
+      description: |
+        Returns sensor event timeline and tracking data for session replay.
+        Used by operators to review disputed sessions and for analytics.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^ssn_[0-9A-HJKMNP-TV-Z]{26}$'
+            example: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: eventTypes
+          in: query
+          required: false
+          description: Comma-separated event type filter
+          schema:
+            type: string
+            example: "SHELF_PICKUP,SHELF_PUTBACK,WEIGHT_CHANGE"
+      responses:
+        "200":
+          description: Replay data retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId:
+                    type: string
+                  duration:
+                    type: string
+                  enteredAt:
+                    type: string
+                    format: date-time
+                  exitedAt:
+                    type: string
+                    format: date-time
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SensorEventRef"
+                  cameraClipUrls:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        cameraId:
+                          type: string
+                        url:
+                          type: string
+                          format: uri
+                        startTime:
+                          type: string
+                          format: date-time
+                        endTime:
+                          type: string
+                          format: date-time
+                  trackingPath:
+                    type: array
+                    description: Customer tracking path through the store
+                    items:
+                      type: object
+                      properties:
+                        timestamp:
+                          type: string
+                          format: date-time
+                        x:
+                          type: number
+                          format: float
+                        y:
+                          type: number
+                          format: float
+                        zone:
+                          type: string
+              example:
+                sessionId: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+                duration: "12m 00s"
+                enteredAt: "2025-11-15T10:30:00Z"
+                exitedAt: "2025-11-15T10:42:00Z"
+                events:
+                  - id: "evt_01HX7B3ABCDEFGHJKMNPQRST"
+                    type: "ENTRY"
+                    timestamp: "2025-11-15T10:30:00Z"
+                    zone: "ENTRANCE"
+                    data:
+                      method: "QR"
+                      deviceId: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+                  - id: "evt_01HX7B3ABCDEFGHJKMNPQRSU"
+                    type: "SHELF_PICKUP"
+                    timestamp: "2025-11-15T10:33:12Z"
+                    zone: "DAIRY_AISLE"
+                    data:
+                      shelfId: "shelf_B3"
+                      itemId: "itm_01HX7B3ABCDEFGHJKMNPQRSU"
+                      itemName: "Peak Milk 400g"
+                      confidence: 0.98
+                  - id: "evt_01HX7B3ABCDEFGHJKMNPQRSV"
+                    type: "SHELF_PICKUP"
+                    timestamp: "2025-11-15T10:35:45Z"
+                    zone: "NOODLES_AISLE"
+                    data:
+                      shelfId: "shelf_D1"
+                      itemId: "itm_01HX7B3ABCDEFGHJKMNPQRSV"
+                      itemName: "Indomie Chicken 70g"
+                      confidence: 0.95
+                  - id: "evt_01HX7B3ABCDEFGHJKMNPQRSW"
+                    type: "SHELF_PUTBACK"
+                    timestamp: "2025-11-15T10:37:00Z"
+                    zone: "NOODLES_AISLE"
+                    data:
+                      shelfId: "shelf_D1"
+                      itemId: "itm_01HX7B3ABCDEFGHJKMNPQRSV"
+                      itemName: "Indomie Chicken 70g"
+                      confidence: 0.72
+                  - id: "evt_01HX7B3ABCDEFGHJKMNPQRSX"
+                    type: "EXIT"
+                    timestamp: "2025-11-15T10:42:00Z"
+                    zone: "EXIT"
+                cameraClipUrls:
+                  - cameraId: "cam_dairy_01"
+                    url: "https://media.ivm.ng/clips/ssn_01HX7B3/cam_dairy_01.mp4"
+                    startTime: "2025-11-15T10:32:00Z"
+                    endTime: "2025-11-15T10:34:00Z"
+                trackingPath:
+                  - timestamp: "2025-11-15T10:30:00Z"
+                    x: 1.0
+                    y: 0.5
+                    zone: "ENTRANCE"
+                  - timestamp: "2025-11-15T10:33:00Z"
+                    x: 5.2
+                    y: 3.1
+                    zone: "DAIRY_AISLE"
+                  - timestamp: "2025-11-15T10:35:30Z"
+                    x: 8.4
+                    y: 6.2
+                    zone: "NOODLES_AISLE"
+                  - timestamp: "2025-11-15T10:42:00Z"
+                    x: 1.0
+                    y: 0.5
+                    zone: "EXIT"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/store/{storeId}/inventory:
+    get:
+      operationId: getStoreInventory
+      tags:
+        - Store Operations
+      summary: Get store inventory
+      description: Returns current inventory levels for the autonomous store.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: storeId
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+        - name: category
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: lowStock
+          in: query
+          required: false
+          description: Filter to items below restock threshold
+          schema:
+            type: boolean
+            default: false
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Inventory retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  storeId:
+                    type: string
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        catalogItemId:
+                          type: string
+                        name:
+                          type: string
+                        sku:
+                          type: string
+                        currentStock:
+                          type: integer
+                        minStock:
+                          type: integer
+                          description: Minimum stock threshold
+                        maxStock:
+                          type: integer
+                          description: Maximum shelf capacity
+                        shelfLocation:
+                          type: string
+                        lastRestocked:
+                          type: string
+                          format: date-time
+                        needsRestock:
+                          type: boolean
+                  summary:
+                    type: object
+                    properties:
+                      totalItems:
+                        type: integer
+                      lowStockItems:
+                        type: integer
+                      outOfStockItems:
+                        type: integer
+                  pagination:
+                    $ref: "#/components/schemas/CursorPagination"
+              example:
+                storeId: "site_01HX7B3ABCDEFGHJKMNPQRST"
+                data:
+                  - catalogItemId: "itm_01HX7B3ABCDEFGHJKMNPQRSU"
+                    name: "Peak Milk 400g"
+                    sku: "PEAK-MILK-400G"
+                    currentStock: 14
+                    minStock: 10
+                    maxStock: 30
+                    shelfLocation: "B3"
+                    lastRestocked: "2025-11-14T06:00:00Z"
+                    needsRestock: false
+                  - catalogItemId: "itm_01HX7B3ABCDEFGHJKMNPQRSV"
+                    name: "Indomie Chicken 70g"
+                    sku: "INDOMIE-CHKN-70G"
+                    currentStock: 4
+                    minStock: 15
+                    maxStock: 50
+                    shelfLocation: "D1"
+                    lastRestocked: "2025-11-13T06:00:00Z"
+                    needsRestock: true
+                summary:
+                  totalItems: 156
+                  lowStockItems: 12
+                  outOfStockItems: 2
+                pagination:
+                  cursor: null
+                  hasMore: false
+                  limit: 20
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  /api/v1/store/{storeId}/analytics:
+    get:
+      operationId: getStoreAnalytics
+      tags:
+        - Store Operations
+      summary: Get store analytics
+      description: Returns operational analytics for the autonomous store including traffic, revenue, and conversion metrics.
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/RequestId"
+        - name: storeId
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+        - name: period
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [today, yesterday, last7d, last30d, custom]
+            default: "today"
+        - name: from
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Analytics retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  storeId:
+                    type: string
+                  period:
+                    type: object
+                    properties:
+                      from:
+                        type: string
+                        format: date-time
+                      to:
+                        type: string
+                        format: date-time
+                  traffic:
+                    type: object
+                    properties:
+                      totalSessions:
+                        type: integer
+                      completedSessions:
+                        type: integer
+                      disputedSessions:
+                        type: integer
+                      averageDuration:
+                        type: string
+                      peakHour:
+                        type: integer
+                        description: Peak traffic hour (0-23)
+                  revenue:
+                    type: object
+                    properties:
+                      totalRevenue:
+                        $ref: "#/components/schemas/Money"
+                      averageBasketValue:
+                        $ref: "#/components/schemas/Money"
+                      averageItemsPerBasket:
+                        type: number
+                        format: float
+                      refundedAmount:
+                        $ref: "#/components/schemas/Money"
+                  topItems:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        catalogItemId:
+                          type: string
+                        name:
+                          type: string
+                        unitsSold:
+                          type: integer
+                        revenue:
+                          $ref: "#/components/schemas/Money"
+                  accuracy:
+                    type: object
+                    properties:
+                      basketAccuracy:
+                        type: number
+                        format: float
+                        description: Percentage of sessions with no disputes
+                      averageConfidence:
+                        type: number
+                        format: float
+                      disputeRate:
+                        type: number
+                        format: float
+              example:
+                storeId: "site_01HX7B3ABCDEFGHJKMNPQRST"
+                period:
+                  from: "2025-11-15T00:00:00Z"
+                  to: "2025-11-15T23:59:59Z"
+                traffic:
+                  totalSessions: 187
+                  completedSessions: 178
+                  disputedSessions: 5
+                  averageDuration: "8m 32s"
+                  peakHour: 13
+                revenue:
+                  totalRevenue:
+                    amount: 8750000
+                    currency: "NGN"
+                  averageBasketValue:
+                    amount: 491573
+                    currency: "NGN"
+                  averageItemsPerBasket: 4.2
+                  refundedAmount:
+                    amount: 125000
+                    currency: "NGN"
+                topItems:
+                  - catalogItemId: "itm_01HX7B3ABCDEFGHJKMNPQRSW"
+                    name: "Coca-Cola 50cl PET"
+                    unitsSold: 89
+                    revenue:
+                      amount: 4450000
+                      currency: "NGN"
+                  - catalogItemId: "itm_01HX7B3ABCDEFGHJKMNPQRSU"
+                    name: "Peak Milk 400g"
+                    unitsSold: 42
+                    revenue:
+                      amount: 7350000
+                      currency: "NGN"
+                accuracy:
+                  basketAccuracy: 97.3
+                  averageConfidence: 0.95
+                  disputeRate: 2.7
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    TenantId:
+      name: X-Tenant-ID
+      in: header
+      required: true
+      schema:
+        type: string
+        example: "tnt_01HX7B3ABCDEFGHJKMNPQRST"
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  headers:
+    X-RateLimit-Limit:
+      schema:
+        type: integer
+        example: 100
+    X-RateLimit-Remaining:
+      schema:
+        type: integer
+        example: 95
+    X-RateLimit-Reset:
+      schema:
+        type: integer
+        format: int64
+
+  schemas:
+    ShoppingSession:
+      type: object
+      required:
+        - id
+        - storeId
+        - customerId
+        - status
+        - entryMethod
+        - enteredAt
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          pattern: '^ssn_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "ssn_01HX7B3ABCDEFGHJKMNPQRST"
+        storeId:
+          type: string
+          example: "site_01HX7B3ABCDEFGHJKMNPQRST"
+        customerId:
+          type: string
+          example: "cust_01HX7B3ABCDEFGHJKMNPQRST"
+        status:
+          $ref: "#/components/schemas/SessionStatus"
+        entryMethod:
+          $ref: "#/components/schemas/EntryMethod"
+        entryDeviceId:
+          type: string
+          example: "dev_01HX7B3DEFGHJKMNPQRSTUVW"
+        paymentMethodId:
+          type: string
+          example: "pm_01HX7B3DEFGHJKMNPQRSTUVW"
+        enteredAt:
+          type: string
+          format: date-time
+          example: "2025-11-15T10:30:00Z"
+        exitedAt:
+          type: string
+          format: date-time
+          nullable: true
+        duration:
+          type: string
+          nullable: true
+          description: Human-readable session duration
+          example: "12m 00s"
+        basket:
+          type: array
+          items:
+            $ref: "#/components/schemas/BasketItem"
+        basketTotal:
+          $ref: "#/components/schemas/Money"
+        orderId:
+          type: string
+          nullable: true
+          description: Associated order ID (after charging)
+        paymentId:
+          type: string
+          nullable: true
+          description: Associated payment ID (after charging)
+        disputeId:
+          type: string
+          nullable: true
+        reconciliationConfidence:
+          type: number
+          format: float
+          nullable: true
+          description: Overall reconciliation confidence score
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    SessionStatus:
+      type: string
+      enum:
+        - ENTRY_AUTHORIZED
+        - SHOPPING
+        - EXIT_DETECTED
+        - RECONCILING
+        - CHARGING
+        - COMPLETED
+        - REVIEW_REQUIRED
+        - RESOLVED
+        - DISPUTED
+      description: |
+        Shopping session lifecycle:
+        - ENTRY_AUTHORIZED: Customer verified, entering store
+        - SHOPPING: Customer is actively shopping
+        - EXIT_DETECTED: Customer has left the store
+        - RECONCILING: Sensor data being processed
+        - CHARGING: Payment being processed
+        - COMPLETED: Session complete, payment successful
+        - REVIEW_REQUIRED: Low confidence, needs operator review
+        - RESOLVED: Operator resolved review/dispute
+        - DISPUTED: Customer disputed the charges
+      example: "ENTRY_AUTHORIZED"
+
+    EntryMethod:
+      type: string
+      enum:
+        - QR
+        - NFC
+        - CARD
+        - FACE
+      description: |
+        Store entry authentication method:
+        - QR: QR code scan from mobile app
+        - NFC: NFC tap with phone or card
+        - CARD: Payment card tap
+        - FACE: Facial recognition
+      example: "QR"
+
+    BasketItem:
+      type: object
+      required:
+        - catalogItemId
+        - name
+        - quantity
+        - unitPrice
+        - lineTotal
+      properties:
+        catalogItemId:
+          type: string
+          example: "itm_01HX7B3ABCDEFGHJKMNPQRSU"
+        name:
+          type: string
+          example: "Peak Milk 400g"
+        sku:
+          type: string
+          example: "PEAK-MILK-400G"
+        quantity:
+          type: integer
+          minimum: 1
+          example: 2
+        unitPrice:
+          $ref: "#/components/schemas/Money"
+        lineTotal:
+          $ref: "#/components/schemas/Money"
+        confidence:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Detection confidence score
+          example: 0.98
+        sensorEvents:
+          type: array
+          items:
+            type: object
+            properties:
+              eventId:
+                type: string
+              type:
+                type: string
+              timestamp:
+                type: string
+                format: date-time
+
+    SensorEventRef:
+      type: object
+      required:
+        - id
+        - type
+        - timestamp
+      properties:
+        id:
+          type: string
+          pattern: '^evt_[0-9A-HJKMNP-TV-Z]{26}$'
+          example: "evt_01HX7B3ABCDEFGHJKMNPQRST"
+        type:
+          type: string
+          enum:
+            - ENTRY
+            - EXIT
+            - SHELF_PICKUP
+            - SHELF_PUTBACK
+            - WEIGHT_CHANGE
+            - RFID_READ
+            - CAMERA_DETECT
+            - ZONE_ENTER
+            - ZONE_EXIT
+          example: "SHELF_PICKUP"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2025-11-15T10:33:12Z"
+        zone:
+          type: string
+          example: "DAIRY_AISLE"
+        data:
+          type: object
+          additionalProperties: true
+          description: Event-specific data
+
+    Money:
+      type: object
+      required:
+        - amount
+        - currency
+      properties:
+        amount:
+          type: integer
+          description: Amount in minor currency units (kobo for NGN)
+        currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          example: "NGN"
+
+    CursorPagination:
+      type: object
+      properties:
+        cursor:
+          type: string
+          nullable: true
+        hasMore:
+          type: boolean
+        limit:
+          type: integer
+
+    ProblemDetail:
+      type: object
+      description: RFC 7807 Problem Details
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+              code:
+                type: string
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/validation-error"
+            title: "Validation Error"
+            status: 400
+
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/unauthorized"
+            title: "Unauthorized"
+            status: 401
+
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/forbidden"
+            title: "Forbidden"
+            status: 403
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/not-found"
+            title: "Not Found"
+            status: 404
+
+    InternalServerError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetail"
+          example:
+            type: "https://api.ivm.ng/problems/internal-error"
+            title: "Internal Server Error"
+            status: 500
+
+security:
+  - BearerAuth: []
